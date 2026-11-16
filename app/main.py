@@ -17,8 +17,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db, profile as profile_mod
-from .config import APP_NAME, APP_VERSION, PUBLIC_BASE_URL
+from . import db, profile as profile_mod, urls
+from .config import APP_NAME, APP_VERSION
 from .fetch import refresh_ruleset, refresh_source
 from .scheduler import loop as scheduler_loop
 from .util import ensure_unique, human_size, mask_secret, slugify
@@ -82,14 +82,10 @@ app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 def base_url(request: Request) -> str:
     """决定写进骨架里的对外地址。
 
-    优先级：数据库设置 > 环境变量 MIHOMO_HUB_BASE_URL > 请求的 Host。
+    优先级：面板设置（反向代理域名） > 反向代理转发头 > 请求的 Host。
+    详见 urls.resolve_base_url。
     """
-    configured = (db.get_settings().get("public_base_url") or "").strip()
-    if configured:
-        return configured.rstrip("/")
-    if PUBLIC_BASE_URL:
-        return PUBLIC_BASE_URL.rstrip("/")
-    return str(request.base_url).rstrip("/")
+    return urls.resolve_base_url(request)
 
 
 def go(url: str, msg: str | None = None, err: str | None = None) -> RedirectResponse:
@@ -602,14 +598,19 @@ async def healthz():
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     from .config import DATA_DIR, DB_PATH
+    detected = urls.detect_base_url(request)
     return render(
         request, "settings.html", settings=db.get_settings(),
         data_dir=str(DATA_DIR), db_path=str(DB_PATH),
+        detected_base=detected,
+        detected_private=urls.is_private_base(detected),
+        auto_detecting=not urls.configured_base_url(),
     )
 
 
 @app.post("/settings/save")
 async def settings_save(
+    request: Request,
     public_base_url: str = Form(""),
     default_ua: str = Form(""),
     ruleset_ua: str = Form(""),
@@ -618,7 +619,12 @@ async def settings_save(
     fetch_interval_min: str = Form("360"),
     ruleset_interval_min: str = Form("1440"),
 ):
-    db.set_setting("public_base_url", public_base_url.strip())
+    try:
+        base = urls.normalize_base_url(public_base_url, urls.detect_scheme(request))
+    except ValueError as exc:
+        return go("/settings", err=f"对外地址无效：{exc}")
+
+    db.set_setting("public_base_url", base)
     db.set_setting("default_ua", default_ua.strip() or "clash-verge/v2.3.1")
     db.set_setting("ruleset_ua", ruleset_ua.strip() or db.DEFAULT_SETTINGS["ruleset_ua"])
     db.set_setting("auto_refresh", "1" if auto_refresh else "0")

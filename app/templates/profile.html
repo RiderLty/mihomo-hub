@@ -15,8 +15,9 @@
       <a class="btn tiny" href="/profile.yaml" target="_blank">看渲染结果</a>
     </div>
     <div class="hint">
-      渲染结果里 <code>{{ '{{base}}' }}</code> 会被替换成上面的地址。若客户端在别的网段访问，请在
-      <a href="/settings">设置</a> 里把「对外地址」写死。
+      渲染结果里 <code>{{ '{{base}}' }}</code> 会被替换成当前对外地址：优先用
+      <a href="/settings">设置</a> 里填写的「对外地址」，留空时按反向代理头自动检测。
+      内外网地址不一致时（例如反向代理到公网域名），建议在设置里写死。
     </div>
   </div>
 </div>

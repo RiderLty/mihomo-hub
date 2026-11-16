@@ -8,9 +8,12 @@ from __future__ import annotations
 import re
 import yaml
 
+from .urls import is_private_base
+
 BASE_PLACEHOLDER = "{{base}}"
 
 _LOOKAHEAD = re.compile(r"\(\?[=!<]")
+_HUB_ENDPOINT_RE = re.compile(r"https?://[^\s'\"#]+/api/(?:providers|rulesets)/[^\s'\"#]+")
 
 
 def render(text: str, base: str) -> str:
@@ -33,6 +36,22 @@ def validate(text: str, proxy_slugs: set[str], rule_slugs: set[str],
     if not (text or "").strip():
         issues.append({"level": "error", "message": "骨架还是空的，先「应用起始模板」或自己写一份"})
         return issues
+
+    # 写死的内网地址：通过反向代理访问时客户端拉不到，提醒改用 {{base}}
+    literal = sorted({
+        u.rstrip(".,;)]}")
+        for u in _HUB_ENDPOINT_RE.findall(text)
+        if is_private_base(u)
+    })
+    if literal:
+        more = f" 等 {len(literal)} 处" if len(literal) > 1 else ""
+        issues.append({
+            "level": "warn",
+            "message": (
+                f"骨架里写死了内网地址 {literal[0]}{more}，建议改成 "
+                f"{BASE_PLACEHOLDER}/api/...；否则通过反向代理访问的客户端拉不到规则"
+            ),
+        })
 
     # 先渲染再解析：模板里的 {{base}} 单独存在时不是合法 YAML
     try:

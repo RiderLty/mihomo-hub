@@ -15,8 +15,8 @@ DB_PATH = DATA_DIR / "hub.sqlite3"
 HOST = os.getenv("MIHOMO_HUB_HOST", "0.0.0.0")
 PORT = int(os.getenv("MIHOMO_HUB_PORT", "8091"))
 
-# 对外基础地址。留空则使用请求头自动推断（局域网直接用 IP 访问时很方便）
-PUBLIC_BASE_URL = os.getenv("MIHOMO_HUB_BASE_URL", "").rstrip("/")
+# 对外地址（反向代理域名）在面板「设置」里维护，并持久化到 SQLite；
+# 留空时按请求头自动检测，不提供环境变量入口。
 
 # 拉取机场订阅时默认使用的 UA。机场通常按 UA 返回不同格式，
 # clash 系 UA 才会返回原生 Clash YAML。

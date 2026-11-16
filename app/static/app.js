@@ -17,6 +17,18 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+// 一键把文本内容填入输入框（例如把自动检测到的地址填进设置项）
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-fill]');
+  if (!btn) return;
+  e.preventDefault();
+  const target = document.querySelector(btn.getAttribute('data-fill'));
+  const source = document.querySelector(btn.getAttribute('data-value'));
+  if (!target || !source) return;
+  target.value = (source.textContent || '').trim();
+  target.focus();
+});
+
 // 危险操作二次确认
 document.addEventListener('submit', (e) => {
   const form = e.target;

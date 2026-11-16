@@ -75,7 +75,10 @@ uv run run.py    # 启动，监听 8091
 3. **配置骨架** → 选节点来源，点「应用起始模板」。会生成 18 个分组
    （含一个可在「单节点 / 一致性哈希 / 轮询」之间切换的 `Custom` 组）。
    之后可以随便改，保存即生效。
-4. 把 `http://<你的地址>:8091/profile.yaml` 填进 mihomo 客户端订阅。
+4. **设置** → 填「对外地址 / 反向代理域名」（例如 `https://hub.example.com`）。
+   留空则自动检测：优先用反向代理传来的 `Forwarded` / `X-Forwarded-*`，最后才用当前访问的 Host。
+   这一步决定了骨架里 provider / ruleset 的地址，客户端从外网访问时务必填对。
+5. 把 `<对外地址>/profile.yaml` 填进 mihomo 客户端订阅。
 
 ### 端点
 
@@ -94,7 +97,6 @@ uv run run.py    # 启动，监听 8091
 | `MIHOMO_HUB_DATA` | `./data` | SQLite 与缓存目录（Docker 里挂卷） |
 | `MIHOMO_HUB_HOST` | `0.0.0.0` | 监听地址 |
 | `MIHOMO_HUB_PORT` | `8091` | 监听端口 |
-| `MIHOMO_HUB_BASE_URL` | 空 | 对外地址；留空则按请求头推断 |
 | `MIHOMO_HUB_UA` | `clash-verge/v2.3.1` | 拉机场的 UA |
 | `MIHOMO_HUB_SCHEDULER` | `1` | `0` 关闭后台刷新 |
 | `MIHOMO_HUB_TICK` | `30` | 调度器检查间隔（秒） |
@@ -107,16 +109,29 @@ docker build -t mihomo-hub .
 docker run -d --name mihomo-hub \
   -p 8091:8091 \
   -v /volume1/docker/mihomo-hub:/data \
-  -e MIHOMO_HUB_BASE_URL=http://192.168.1.10:8091 \
   mihomo-hub
 ```
 
-或直接 `docker compose up -d`。
+或直接 `docker compose up -d`。首次启动后打开面板「设置」，填上对外地址（反向代理域名）。
 
 镜像内用 `uv sync --frozen --no-dev` 安装依赖，构建可复现（锁定在 `uv.lock`）。
 
-> `MIHOMO_HUB_BASE_URL` 建议显式设置：如果客户端从别的网段访问，
-> 自动推断出来的地址会是不可达的内网 IP。
+## 反向代理
+
+面板里填写的「对外地址」优先级最高；留空时按请求头自动检测，所以反代最好转发原始信息：
+
+```nginx
+location / {
+    proxy_pass http://192.168.3.9:8091;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Port  $server_port;
+}
+```
+
+这样即使不填「对外地址」，`/profile.yaml` 里的 provider / ruleset 地址也会是
+`https://你的域名/api/...`，而不是内网 IP。反代没有转发这些头时，直接在面板里填写即可。
 
 ## 设计说明
 
@@ -147,10 +162,11 @@ docker run -d --name mihomo-hub \
 
 ```
 app/
-  config.py     环境变量
+  config.py     运行期配置（数据目录、监听地址等）
   db.py         SQLite schema 与读写
   fetch.py      抓取 / 解析 / 缓存 / 差异统计
   profile.py    骨架模板、渲染、校验
+  urls.py       对外地址解析（面板配置 / 反代头 / 自动检测）
   scheduler.py  后台定时刷新
   main.py       路由与 Web UI
   templates/    Jinja2 页面
