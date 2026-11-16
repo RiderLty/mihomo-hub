@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import db, profile as profile_mod
-from .config import APP_NAME, APP_VERSION
+from .config import APP_NAME, APP_VERSION, PUBLIC_BASE_URL
 from .fetch import refresh_ruleset, refresh_source
 from .scheduler import loop as scheduler_loop
 from .util import ensure_unique, human_size, mask_secret, slugify
@@ -80,9 +80,15 @@ app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 # ---------------------------------------------------------------- helpers
 
 def base_url(request: Request) -> str:
+    """决定写进骨架里的对外地址。
+
+    优先级：数据库设置 > 环境变量 MIHOMO_HUB_BASE_URL > 请求的 Host。
+    """
     configured = (db.get_settings().get("public_base_url") or "").strip()
     if configured:
         return configured.rstrip("/")
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL.rstrip("/")
     return str(request.base_url).rstrip("/")
 
 
