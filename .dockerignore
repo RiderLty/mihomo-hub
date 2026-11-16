@@ -1,0 +1,10 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+data/
+.tmp/
+.git/
+.gitignore
+docker-compose.yml
+*.local

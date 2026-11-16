@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block heading %}{{ s.name }}{% endblock %}
+{% block actions %}
+<form method="post" action="/sources/{{ s.id }}/refresh" style="margin:0">
+  <button class="primary" type="submit">重新抓取</button>
+</form>
+{% endblock %}
+
+{% block content %}
+
+{% if userinfo %}
+<div class="panel">
+  <h2>机场流量信息</h2>
+  <div class="panel-body">
+    <div class="cards" style="margin:0">
+      <div class="card"><div class="k">已上传</div><div class="v" style="font-size:16px">{{ userinfo.upload|bytes_h }}</div></div>
+      <div class="card"><div class="k">已下载</div><div class="v" style="font-size:16px">{{ userinfo.download|bytes_h }}</div></div>
+      <div class="card"><div class="k">总流量</div><div class="v" style="font-size:16px">{{ userinfo.total|bytes_h }}</div></div>
+      <div class="card"><div class="k">到期</div><div class="v" style="font-size:16px">{{ userinfo.expire|epoch_date }}</div></div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>编辑</h2>
+  <div class="panel-body">
+    <form method="post" action="/sources/{{ s.id }}/update">
+      <div class="grid2">
+        <div class="field"><label>名称</label><input type="text" name="name" value="{{ s.name }}" required></div>
+        <div class="field"><label>标识（slug）</label><input type="text" name="slug" value="{{ s.slug }}"></div>
+      </div>
+      <div class="field"><label>订阅 URL</label><input type="text" name="url" value="{{ s.url }}" required></div>
+      <div class="grid4">
+        <div class="field"><label>间隔（分钟）</label><input type="number" name="interval_min" value="{{ s.interval_min }}" min="5"></div>
+        <div class="field"><label>User-Agent</label><input type="text" name="user_agent" value="{{ s.user_agent or '' }}"></div>
+        <div class="field"><label>&nbsp;</label>
+          <label class="check"><input type="checkbox" name="strip_pseudo" value="1" {{ 'checked' if s.strip_pseudo }}>过滤伪节点</label>
+        </div>
+        <div class="field"><label>&nbsp;</label>
+          <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if s.enabled }}>启用</label>
+        </div>
+      </div>
+      <button class="primary" type="submit">保存并重新抓取</button>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>客户端引用地址</h2>
+  <div class="panel-body">
+    <div class="copy-row">
+      <div class="code" id="purl">{{ base }}/api/providers/{{ s.slug }}.yaml</div>
+      <button class="tiny" data-copy="#purl">复制</button>
+      <a class="btn tiny" href="/api/providers/{{ s.slug }}.yaml" target="_blank">查看原始</a>
+    </div>
+    <div class="hint">这是 proxy-providers 的 URL，只包含 proxies 段，不含机场自带的规则。</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>已缓存节点（{{ nodes|length }}）</h2>
+  {% if nodes %}
+  <table>
+    <thead><tr><th>名称</th><th>类型</th><th>服务器</th><th class="num">端口</th><th>凭据</th></tr></thead>
+    <tbody>
+      {% for n in nodes[:300] %}
+      <tr>
+        <td>{{ n.name }}</td>
+        <td class="muted">{{ n.type }}</td>
+        <td class="mono">{{ n.server }}</td>
+        <td class="num mono">{{ n.port }}</td>
+        <td class="mono muted">{{ ((n.password or n.uuid or n.auth or '')|string)[:6] }}…</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if nodes|length > 300 %}<div class="panel-body muted">仅显示前 300 个。</div>{% endif %}
+  {% else %}
+  <div class="panel-body muted">还没有缓存节点。</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>抓取历史</h2>
+  {% if logs %}
+  <table>
+    <thead><tr><th>时间</th><th>结果</th><th class="num">节点</th><th class="num">大小</th><th class="num">耗时</th><th>说明</th></tr></thead>
+    <tbody>
+      {% for l in logs %}
+      <tr>
+        <td class="muted">{{ l.at|ts }}</td>
+        <td>{% if l.ok %}<span class="badge ok">成功</span>{% else %}<span class="badge err">失败</span>{% endif %}</td>
+        <td class="num">{{ l.counts or 0 }}</td>
+        <td class="num">{{ (l.size or 0)|human_size }}</td>
+        <td class="num muted">{{ l.duration_ms or 0 }} ms</td>
+        <td class="muted">{{ l.message or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="panel-body muted">暂无记录。</div>
+  {% endif %}
+</div>
+
+<form method="post" action="/sources/{{ s.id }}/delete" data-confirm="确定删除这个订阅源？" style="margin:0">
+  <button class="danger" type="submit">删除订阅源</button>
+</form>
+
+{% endblock %}

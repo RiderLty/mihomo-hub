@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block heading %}{{ r.name }}{% endblock %}
+{% block actions %}
+<form method="post" action="/rulesets/{{ r.id }}/refresh" style="margin:0">
+  <button class="primary" type="submit">重新抓取</button>
+</form>
+{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <h2>编辑</h2>
+  <div class="panel-body">
+    <form method="post" action="/rulesets/{{ r.id }}/update">
+      <div class="grid3">
+        <div class="field"><label>名称</label><input type="text" name="name" value="{{ r.name }}" required></div>
+        <div class="field"><label>标识（slug）</label><input type="text" name="slug" value="{{ r.slug }}"></div>
+        <div class="field"><label>类型</label>
+          <select name="kind">
+            <option value="remote" {{ 'selected' if r.kind == 'remote' }}>远程 URL</option>
+            <option value="inline" {{ 'selected' if r.kind == 'inline' }}>内联粘贴</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>URL</label><input type="text" name="url" value="{{ r.url or '' }}"></div>
+      <div class="field"><label>内联内容</label>
+        <textarea name="inline_content" rows="8">{{ r.inline_content or '' }}</textarea>
+      </div>
+      <div class="grid4">
+        <div class="field"><label>behavior</label>
+          <select name="behavior">
+            {% for b in ['classical','domain','ipcidr'] %}
+            <option value="{{ b }}" {{ 'selected' if r.behavior == b }}>{{ b }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field"><label>format</label>
+          <select name="format">
+            {% for f in ['text','yaml','mrs'] %}
+            <option value="{{ f }}" {{ 'selected' if r.format == f }}>{{ f }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field"><label>默认出口</label><input type="text" name="default_target" value="{{ r.default_target }}"></div>
+        <div class="field"><label>间隔（分钟）</label><input type="number" name="interval_min" value="{{ r.interval_min }}" min="5"></div>
+      </div>
+      <label class="check" style="margin-bottom:12px">
+        <input type="checkbox" name="enabled" value="1" {{ 'checked' if r.enabled }}>启用
+      </label>
+      <button class="primary" type="submit">保存并重新抓取</button>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>客户端引用地址</h2>
+  <div class="panel-body">
+    <div class="copy-row">
+      <div class="code" id="rurl">{{ base }}/api/rulesets/{{ r.slug }}.list</div>
+      <button class="tiny" data-copy="#rurl">复制</button>
+      <a class="btn tiny" href="/api/rulesets/{{ r.slug }}.list" target="_blank">查看原始</a>
+    </div>
+    <div class="hint">
+      在骨架里这样引用：<code>rule-providers.{{ r.slug }}</code>（behavior <code>{{ r.behavior }}</code> / format <code>{{ r.format }}</code>），
+      规则里写 <code>RULE-SET,{{ r.slug }},{{ r.default_target }}</code>。
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>内容预览（前 400 行，共 {{ r.rule_count or 0 }} 条）</h2>
+  <div class="panel-body">
+    {% if preview %}
+    <pre style="max-height:520px">{{ preview|join('\n') }}</pre>
+    {% else %}
+    <div class="muted">还没有内容。</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <h2>抓取历史</h2>
+  {% if logs %}
+  <table>
+    <thead><tr><th>时间</th><th>结果</th><th class="num">条数</th><th class="num">耗时</th><th>说明</th></tr></thead>
+    <tbody>
+      {% for l in logs %}
+      <tr>
+        <td class="muted">{{ l.at|ts }}</td>
+        <td>{% if l.ok %}<span class="badge ok">成功</span>{% else %}<span class="badge err">失败</span>{% endif %}</td>
+        <td class="num">{{ l.counts or 0 }}</td>
+        <td class="num muted">{{ l.duration_ms or 0 }} ms</td>
+        <td class="muted">{{ l.message or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="panel-body muted">暂无记录。</div>
+  {% endif %}
+</div>
+
+<form method="post" action="/rulesets/{{ r.id }}/delete" data-confirm="确定删除这个规则集？" style="margin:0">
+  <button class="danger" type="submit">删除规则集</button>
+</form>
+
+{% endblock %}

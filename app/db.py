@@ -1,0 +1,214 @@
+"""SQLite 持久化层。用标准库 sqlite3，不引入 ORM。"""
+from __future__ import annotations
+
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
+
+from .config import DB_PATH
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS sources (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug            TEXT    NOT NULL UNIQUE,
+    name            TEXT    NOT NULL,
+    url             TEXT    NOT NULL,
+    user_agent      TEXT    NOT NULL DEFAULT '',
+    interval_min    INTEGER NOT NULL DEFAULT 360,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    strip_pseudo    INTEGER NOT NULL DEFAULT 1,
+    content         TEXT,
+    content_size    INTEGER DEFAULT 0,
+    node_count      INTEGER DEFAULT 0,
+    userinfo        TEXT,
+    etag            TEXT,
+    last_fetch_at   TEXT,
+    last_status     TEXT    NOT NULL DEFAULT 'never',
+    last_error      TEXT,
+    last_ms         INTEGER,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rulesets (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug            TEXT    NOT NULL UNIQUE,
+    name            TEXT    NOT NULL,
+    kind            TEXT    NOT NULL DEFAULT 'remote',
+    url             TEXT,
+    path            TEXT,
+    inline_content  TEXT,
+    behavior        TEXT    NOT NULL DEFAULT 'classical',
+    format          TEXT    NOT NULL DEFAULT 'text',
+    default_target  TEXT    NOT NULL DEFAULT 'Proxies',
+    interval_min    INTEGER NOT NULL DEFAULT 1440,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    content         TEXT,
+    content_size    INTEGER DEFAULT 0,
+    rule_count      INTEGER DEFAULT 0,
+    last_fetch_at   TEXT,
+    last_status     TEXT    NOT NULL DEFAULT 'never',
+    last_error      TEXT,
+    last_ms         INTEGER,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profile (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    content    TEXT NOT NULL DEFAULT '',
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fetch_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT    NOT NULL,
+    ref_id     INTEGER NOT NULL,
+    ref_slug   TEXT,
+    at         TEXT    NOT NULL,
+    ok         INTEGER NOT NULL,
+    status     TEXT,
+    size       INTEGER,
+    counts     INTEGER,
+    duration_ms INTEGER,
+    message    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_log_at ON fetch_log(at DESC);
+"""
+
+DEFAULT_SETTINGS = {
+    "public_base_url": "",
+    "default_ua": "clash-verge/v2.3.1",
+    # 规则集来源多为网盘/CDN 直链，对 UA 敏感，clash 系 UA 常被 403
+    "ruleset_ua": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "auto_refresh": "1",
+    "strip_pseudo": "1",
+    "fetch_interval_min": "360",
+    "ruleset_interval_min": "1440",
+}
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(DB_PATH), timeout=15)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+@contextmanager
+def tx():
+    conn = connect()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def query(sql: str, args: tuple = ()) -> list[sqlite3.Row]:
+    conn = connect()
+    try:
+        return list(conn.execute(sql, args))
+    finally:
+        conn.close()
+
+
+def query_one(sql: str, args: tuple = ()):
+    conn = connect()
+    try:
+        return conn.execute(sql, args).fetchone()
+    finally:
+        conn.close()
+
+
+def init_db() -> None:
+    with tx() as conn:
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        for k, v in DEFAULT_SETTINGS.items():
+            conn.execute(
+                "INSERT INTO settings(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO NOTHING",
+                (k, v),
+            )
+        row = conn.execute("SELECT id FROM profile WHERE id = 1").fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO profile(id, content, updated_at) VALUES(1, '', ?)",
+                (now_iso(),),
+            )
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """轻量迁移：给老库补上新增的列。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(rulesets)")}
+    if "path" not in cols:
+        conn.execute("ALTER TABLE rulesets ADD COLUMN path TEXT")
+
+
+# ---------- settings ----------
+
+def get_settings() -> dict[str, str]:
+    return {r["key"]: r["value"] for r in query("SELECT key, value FROM settings")}
+
+
+def set_setting(key: str, value: str) -> None:
+    with tx() as conn:
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+
+# ---------- profile ----------
+
+def get_profile() -> str:
+    row = query_one("SELECT content FROM profile WHERE id = 1")
+    return (row["content"] if row else "") or ""
+
+
+def save_profile(content: str) -> None:
+    with tx() as conn:
+        conn.execute(
+            "UPDATE profile SET content = ?, updated_at = ? WHERE id = 1",
+            (content, now_iso()),
+        )
+
+
+# ---------- fetch log ----------
+
+def add_log(kind: str, ref_id: int, ref_slug: str, ok: bool, *,
+            status: str = "", size: int = 0, counts: int = 0,
+            duration_ms: int = 0, message: str = "") -> None:
+    with tx() as conn:
+        conn.execute(
+            "INSERT INTO fetch_log(kind, ref_id, ref_slug, at, ok, status, size, counts, duration_ms, message)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (kind, ref_id, ref_slug, now_iso(), 1 if ok else 0, status,
+             size, counts, duration_ms, message[:500]),
+        )
+        # 只保留最近 500 条
+        conn.execute(
+            "DELETE FROM fetch_log WHERE id NOT IN (SELECT id FROM fetch_log ORDER BY id DESC LIMIT 500)"
+        )
+
+
+def recent_logs(limit: int = 20) -> list[sqlite3.Row]:
+    return query("SELECT * FROM fetch_log ORDER BY id DESC LIMIT ?", (limit,))

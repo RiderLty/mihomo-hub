@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block heading %}配置骨架{% endblock %}
+{% block actions %}
+<a class="btn" href="/profile/download">下载</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <h2>客户端订阅地址</h2>
+  <div class="panel-body">
+    <div class="copy-row">
+      <div class="code" id="suburl">{{ base }}/profile.yaml</div>
+      <button class="tiny" data-copy="#suburl">复制</button>
+      <a class="btn tiny" href="/profile.yaml" target="_blank">看渲染结果</a>
+    </div>
+    <div class="hint">
+      渲染结果里 <code>{{ '{{base}}' }}</code> 会被替换成上面的地址。若客户端在别的网段访问，请在
+      <a href="/settings">设置</a> 里把「对外地址」写死。
+    </div>
+  </div>
+</div>
+
+{% if issues %}
+<div class="panel">
+  <h2>校验结果（{{ issues|length }}）</h2>
+  <div class="panel-body">
+    <ul class="issues">
+      {% for i in issues %}
+      <li class="{{ i.level }}">{{ i.message }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% else %}
+<div class="panel">
+  <h2>校验结果</h2>
+  <div class="panel-body">
+    <ul class="issues"><li class="ok">没有问题，配置看起来可用 ✔</li></ul>
+  </div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>骨架内容</h2>
+  <div class="panel-body">
+    <form method="post" action="/profile/save">
+      <div class="field">
+        <textarea name="content" rows="34" spellcheck="false" style="font-size:12.5px">{{ content }}</textarea>
+      </div>
+      <div class="row">
+        <button class="primary" type="submit">保存</button>
+        <span class="spacer"></span>
+        <span class="hint" style="margin:0">保存后立即生效，客户端下次拉取即可看到。</span>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>从起始模板重建</h2>
+  <div class="panel-body">
+    <form method="post" action="/profile/starter" data-confirm="会用模板覆盖当前骨架内容，确定？">
+      <div class="grid2">
+        <div class="field">
+          <label>节点来源（proxy-provider）</label>
+          <select name="source_slug">
+            {% for s in sources %}
+            <option value="{{ s.slug }}">{{ s.name }}（{{ s.slug }}，{{ s.node_count or 0 }} 节点）</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="primary" type="submit" {{ 'disabled' if not sources }}>应用起始模板</button>
+        </div>
+      </div>
+      <div class="hint">
+        模板包含 16 个分组（含一个可在「单节点 / 一致性哈希 / 轮询」之间切换的 Custom 组），
+        并按各规则集的「默认出口」生成 RULE-SET。会覆盖当前内容，请先备份。
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>可引用的端点</h2>
+  <div class="panel-body">
+    <table>
+      <thead><tr><th>用途</th><th>地址</th><th></th></tr></thead>
+      <tbody>
+        {% for s in sources %}
+        <tr>
+          <td>订阅源 <span class="tag">{{ s.slug }}</span></td>
+          <td class="mono" id="ep-src-{{ s.id }}">{{ base }}/api/providers/{{ s.slug }}.yaml</td>
+          <td class="right"><button class="tiny" data-copy="#ep-src-{{ s.id }}">复制</button></td>
+        </tr>
+        {% endfor %}
+        {% for r in rulesets %}
+        <tr>
+          <td>规则集 <span class="tag">{{ r.slug }}</span></td>
+          <td class="mono" id="ep-rs-{{ r.id }}">{{ base }}/api/rulesets/{{ r.slug }}.list</td>
+          <td class="right"><button class="tiny" data-copy="#ep-rs-{{ r.id }}">复制</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

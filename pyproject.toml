@@ -1,0 +1,23 @@
+[project]
+name = "mihomo-hub"
+version = "0.1.0"
+description = "机场节点与规则的缓存中心，为 mihomo 客户端提供 proxy-providers / rule-providers"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.110,<1.0",
+    "uvicorn[standard]>=0.27",
+    "jinja2>=3.1",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "python-multipart>=0.0.9",
+]
+
+[tool.uv]
+# 这是一个应用，不是要发布到 PyPI 的库，因此不做“安装项目自身”这一步
+package = false
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

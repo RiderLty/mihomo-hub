@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block heading %}订阅源{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <h2>新增订阅源</h2>
+  <div class="panel-body">
+    <form method="post" action="/sources/add">
+      <div class="grid2">
+        <div class="field">
+          <label>名称</label>
+          <input type="text" name="name" placeholder="例如 LinkCube" required>
+        </div>
+        <div class="field">
+          <label>标识（slug，用于 URL，可留空自动生成）</label>
+          <input type="text" name="slug" placeholder="例如 linkcube">
+        </div>
+      </div>
+      <div class="field">
+        <label>订阅 URL</label>
+        <input type="text" name="url" placeholder="https://.../api/v1/client/subscribe?token=..." required>
+      </div>
+      <div class="grid3">
+        <div class="field">
+          <label>拉取间隔（分钟）</label>
+          <input type="number" name="interval_min" value="{{ default_interval }}" min="5">
+        </div>
+        <div class="field">
+          <label>User-Agent（留空用默认）</label>
+          <input type="text" name="user_agent" placeholder="{{ default_ua }}">
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check">
+            <input type="checkbox" name="strip_pseudo" value="1" checked>
+            过滤「流量 / 到期」伪节点
+          </label>
+        </div>
+      </div>
+      <button class="primary" type="submit">添加并立即抓取</button>
+      <div class="hint">机场按 UA 决定返回格式；clash 系 UA 才会返回原生 YAML，供 proxy-providers 直接使用。</div>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>已添加（{{ sources|length }}）</h2>
+  {% if sources %}
+  <table>
+    <thead>
+      <tr><th>名称</th><th>节点</th><th class="num">大小</th><th>间隔</th><th>状态</th><th>上次抓取</th><th class="right">操作</th></tr>
+    </thead>
+    <tbody>
+      {% for s in sources %}
+      <tr>
+        <td>
+          <a href="/sources/{{ s.id }}">{{ s.name }}</a>
+          {% if not s.enabled %}<span class="badge warn">已禁用</span>{% endif %}
+          <div class="tag">/{{ s.slug }}</div>
+        </td>
+        <td class="num">{{ s.node_count or 0 }}</td>
+        <td class="num">{{ (s.content_size or 0)|human_size }}</td>
+        <td class="muted">{{ s.interval_min }} 分</td>
+        <td>
+          {% if s.last_status == 'ok' %}<span class="badge ok">正常</span>
+          {% elif s.last_status == 'error' %}<span class="badge err" title="{{ s.last_error }}">失败</span>
+          {% else %}<span class="badge never">未抓取</span>{% endif %}
+        </td>
+        <td class="muted">{{ s.last_fetch_at|ts }}</td>
+        <td class="right">
+          <form method="post" action="/sources/{{ s.id }}/refresh" style="display:inline">
+            <button class="tiny" type="submit">刷新</button>
+          </form>
+          <a class="btn tiny" href="/sources/{{ s.id }}">编辑</a>
+        </td>
+      </tr>
+      {% if s.last_error %}
+      <tr><td colspan="7" class="muted" style="padding-left:40px">
+        <span class="badge err">最近错误</span> {{ s.last_error }}
+      </td></tr>
+      {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="panel-body muted">还没有订阅源。</div>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block heading %}设置{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <h2>基础</h2>
+  <div class="panel-body">
+    <form method="post" action="/settings/save">
+      <div class="field">
+        <label>对外地址（留空则按请求自动推断）</label>
+        <input type="text" name="public_base_url" value="{{ settings.public_base_url }}"
+               placeholder="例如 http://192.168.1.10:8091 或 https://hub.example.com">
+        <div class="hint">
+          这个值会被写进 <code>/profile.yaml</code> 里替换 <code>{{ '{{base}}' }}</code>。
+          如果客户端在别的网络访问，务必填成它能访问到的地址。
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label>拉取机场时的默认 User-Agent</label>
+          <input type="text" name="default_ua" value="{{ settings.default_ua }}">
+          <div class="hint">机场按 UA 判断返回格式，clash 系才会给原生 YAML。</div>
+        </div>
+        <div class="field">
+          <label>拉取规则集时的 User-Agent</label>
+          <input type="text" name="ruleset_ua" value="{{ settings.ruleset_ua }}">
+          <div class="hint">网盘 / CDN 直链对 UA 敏感，clash 系 UA 常被 403，建议用浏览器 UA。</div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label>订阅源默认间隔（分钟）</label>
+          <input type="number" name="fetch_interval_min" value="{{ settings.fetch_interval_min }}" min="5">
+        </div>
+        <div class="field">
+          <label>规则集默认间隔（分钟）</label>
+          <input type="number" name="ruleset_interval_min" value="{{ settings.ruleset_interval_min }}" min="5">
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check">
+            <input type="checkbox" name="auto_refresh" value="1" {{ 'checked' if settings.auto_refresh == '1' }}>
+            启用后台定时刷新
+          </label>
+          <label class="check" style="margin-top:6px">
+            <input type="checkbox" name="strip_pseudo" value="1" {{ 'checked' if settings.strip_pseudo == '1' }}>
+            新建订阅源时默认过滤伪节点
+          </label>
+        </div>
+        <div class="field"></div>
+      </div>
+
+      <button class="primary" type="submit">保存</button>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>运行信息</h2>
+  <div class="panel-body">
+    <table>
+      <tbody>
+        <tr><td class="muted">数据目录</td><td class="mono">{{ data_dir }}</td></tr>
+        <tr><td class="muted">数据库</td><td class="mono">{{ db_path }}</td></tr>
+        <tr><td class="muted">版本</td><td class="mono">{{ version }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>部署提示</h2>
+  <div class="panel-body muted" style="font-size:13px">
+    <p style="margin-top:0">封装成 Docker 时可用这些环境变量：</p>
+    <pre>MIHOMO_HUB_DATA=/data       # sqlite 与缓存的存放目录，挂卷
+MIHOMO_HUB_PORT=8091        # 监听端口
+MIHOMO_HUB_HOST=0.0.0.0
+MIHOMO_HUB_BASE_URL=        # 对外地址，等价于本页第一项
+MIHOMO_HUB_UA=clash-verge/v2.3.1
+MIHOMO_HUB_SCHEDULER=1      # 0 关闭后台刷新
+MIHOMO_HUB_TIMEOUT=30</pre>
+  </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block heading %}规则集{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <h2>从本地目录批量导入</h2>
+  <div class="panel-body">
+    <form method="post" action="/rulesets/import">
+      <div class="grid3">
+        <div class="field" style="grid-column: span 2">
+          <label>目录（相对项目根目录或绝对路径）</label>
+          <input type="text" name="dir_path" value="{{ import_dir }}"
+                 placeholder="subconverter-config@master/ruleset">
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check">
+            <input type="checkbox" name="overwrite" value="1">覆盖已存在的同 slug 规则集
+          </label>
+          <button class="primary" type="submit" style="margin-top:8px">扫描并导入</button>
+        </div>
+      </div>
+      <div class="hint">
+        递归扫描目录下所有 <code>.list</code>，按文件名推断出口（china→DIRECT、streaming→Streaming、
+        hijacking→REJECT 等），导入后可在详情页逐个调整。已存在的默认跳过。
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>新增规则集</h2>
+  <div class="panel-body">
+    <form method="post" action="/rulesets/add">
+      <div class="grid3">
+        <div class="field"><label>名称</label><input type="text" name="name" placeholder="例如 China" required></div>
+        <div class="field"><label>标识（slug，可留空）</label><input type="text" name="slug" placeholder="china"></div>
+        <div class="field"><label>类型</label>
+          <select name="kind">
+            <option value="remote">远程 URL</option>
+            <option value="file">本地文件</option>
+            <option value="inline">内联粘贴</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>URL（类型为远程时必填）</label>
+        <input type="text" name="url" placeholder="https://.../China.list">
+      </div>
+      <div class="field"><label>文件路径（类型为本地文件时必填）</label>
+        <input type="text" name="path" placeholder="subconverter-config@master/ruleset/local.list">
+      </div>
+      <div class="field"><label>内联内容（类型为内联时必填，每行一条 <code>DOMAIN-SUFFIX,example.com</code>）</label>
+        <textarea name="inline_content" rows="5" placeholder="DOMAIN-SUFFIX,example.com&#10;DOMAIN,foo.bar.com"></textarea>
+      </div>
+      <div class="grid4">
+        <div class="field"><label>behavior</label>
+          <select name="behavior">
+            <option value="classical">classical</option>
+            <option value="domain">domain</option>
+            <option value="ipcidr">ipcidr</option>
+          </select>
+        </div>
+        <div class="field"><label>format</label>
+          <select name="format">
+            <option value="text">text</option>
+            <option value="yaml">yaml</option>
+            <option value="mrs">mrs</option>
+          </select>
+        </div>
+        <div class="field"><label>默认出口（生成骨架时使用）</label>
+          <input type="text" name="default_target" value="Proxies" list="targets">
+          <datalist id="targets">
+            <option value="Proxies"><option value="DIRECT"><option value="Streaming">
+            <option value="StreamingSE"><option value="Apple"><option value="MicroSoft">
+            <option value="Telegram"><option value="Netease">
+          </datalist>
+        </div>
+        <div class="field"><label>拉取间隔（分钟，本地/内联可忽略）</label>
+          <input type="number" name="interval_min" value="{{ default_interval }}" min="5">
+        </div>
+      </div>
+      <button class="primary" type="submit">添加</button>
+      <div class="hint">
+        规则集只提供「匹配哪些域名」，出口由骨架里的 <code>RULE-SET,slug,出口</code> 决定。
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>已添加（{{ rulesets|length }}）</h2>
+  {% if rulesets %}
+  <table>
+    <thead><tr><th>名称</th><th>类型</th><th class="num">条数</th><th>出口</th><th>状态</th><th>上次读取</th><th class="right">操作</th></tr></thead>
+    <tbody>
+      {% for r in rulesets %}
+      <tr>
+        <td>
+          <a href="/rulesets/{{ r.id }}">{{ r.name }}</a>
+          {% if not r.enabled %}<span class="badge warn">已禁用</span>{% endif %}
+          <div class="tag">/{{ r.slug }}</div>
+        </td>
+        <td class="muted">
+          {% if r.kind == 'inline' %}内联{% elif r.kind == 'file' %}本地{% else %}远程{% endif %}
+        </td>
+        <td class="num">{{ r.rule_count or 0 }}</td>
+        <td class="muted">{{ r.default_target }}</td>
+        <td>
+          {% if r.last_status == 'ok' %}<span class="badge ok">正常</span>
+          {% elif r.last_status == 'error' %}<span class="badge err" title="{{ r.last_error }}">失败</span>
+          {% else %}<span class="badge never">未读取</span>{% endif %}
+        </td>
+        <td class="muted">{{ r.last_fetch_at|ts }}</td>
+        <td class="right">
+          <form method="post" action="/rulesets/{{ r.id }}/refresh" style="display:inline">
+            <button class="tiny" type="submit">刷新</button>
+          </form>
+          <a class="btn tiny" href="/rulesets/{{ r.id }}">编辑</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="panel-body muted">还没有规则集。可以用上面的「批量导入」。</div>
+  {% endif %}
+</div>
+
+{% endblock %}

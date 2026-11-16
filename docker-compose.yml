@@ -1,0 +1,19 @@
+services:
+  mihomo-hub:
+    build: .
+    image: mihomo-hub:latest
+    container_name: mihomo-hub
+    restart: unless-stopped
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./data:/data
+    environment:
+      # 改成客户端能访问到的地址
+      MIHOMO_HUB_BASE_URL: "http://192.168.1.10:8091"
+      MIHOMO_HUB_TZ: "Asia/Shanghai"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8091/healthz', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

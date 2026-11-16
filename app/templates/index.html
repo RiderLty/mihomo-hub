@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block heading %}概览{% endblock %}
+{% block actions %}
+<form method="post" action="/refresh-all" style="margin:0">
+  <button class="primary" type="submit">刷新全部</button>
+</form>
+{% endblock %}
+
+{% block content %}
+
+<div class="cards">
+  <div class="card"><div class="k">订阅源</div><div class="v">{{ sources|length }}</div></div>
+  <div class="card"><div class="k">节点总数</div><div class="v">{{ total_nodes }}</div></div>
+  <div class="card"><div class="k">规则集</div><div class="v">{{ rulesets|length }}</div></div>
+  <div class="card"><div class="k">规则条数</div><div class="v">{{ total_rules }}</div></div>
+</div>
+
+{% if issues %}
+<div class="panel">
+  <h2>配置检查（{{ issues|length }} 项）</h2>
+  <div class="panel-body">
+    <ul class="issues">
+      {% for i in issues[:6] %}
+      <li class="{{ i.level }}">{{ i.message }}</li>
+      {% endfor %}
+    </ul>
+    {% if issues|length > 6 %}
+    <div class="hint">还有 {{ issues|length - 6 }} 项，去<a href="/profile">配置骨架</a>页面查看。</div>
+    {% else %}
+    <div class="hint"><a href="/profile">打开配置骨架 →</a></div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>客户端订阅地址</h2>
+  <div class="panel-body">
+    <div class="copy-row">
+      <div class="code" id="suburl">{{ base }}/profile.yaml</div>
+      <button class="tiny" data-copy="#suburl">复制</button>
+      <a class="btn tiny" href="/profile.yaml" target="_blank">预览</a>
+    </div>
+    <div class="hint">把这一条填进 mihomo 客户端的订阅里即可。节点与规则由客户端按需自取。</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>订阅源</h2>
+  {% if sources %}
+  <table>
+    <thead>
+      <tr><th>名称</th><th>节点</th><th class="num">大小</th><th>状态</th><th>上次抓取</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for s in sources %}
+      <tr>
+        <td><a href="/sources/{{ s.id }}">{{ s.name }}</a><div class="tag">/{{ s.slug }}</div></td>
+        <td class="num">{{ s.node_count or 0 }}</td>
+        <td class="num">{{ (s.content_size or 0)|human_size }}</td>
+        <td>
+          {% if s.last_status == 'ok' %}<span class="badge ok">正常</span>
+          {% elif s.last_status == 'error' %}<span class="badge err">失败</span>
+          {% else %}<span class="badge never">未抓取</span>{% endif %}
+        </td>
+        <td class="muted">{{ s.last_fetch_at|ts }}</td>
+        <td class="right"><a href="/sources/{{ s.id }}">详情</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="panel-body muted">还没有订阅源，去<a href="/sources">添加一个</a>。</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>规则集</h2>
+  {% if rulesets %}
+  <table>
+    <thead><tr><th>名称</th><th>类型</th><th class="num">条数</th><th>出口</th><th>状态</th><th>上次抓取</th></tr></thead>
+    <tbody>
+      {% for r in rulesets %}
+      <tr>
+        <td><a href="/rulesets/{{ r.id }}">{{ r.name }}</a><div class="tag">/{{ r.slug }}</div></td>
+        <td class="muted">{{ '内联' if r.kind == 'inline' else '远程' }}</td>
+        <td class="num">{{ r.rule_count or 0 }}</td>
+        <td class="muted">{{ r.default_target }}</td>
+        <td>
+          {% if r.last_status == 'ok' %}<span class="badge ok">正常</span>
+          {% elif r.last_status == 'error' %}<span class="badge err">失败</span>
+          {% else %}<span class="badge never">未抓取</span>{% endif %}
+        </td>
+        <td class="muted">{{ r.last_fetch_at|ts }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="panel-body muted">还没有规则集，去<a href="/rulesets">添加一个</a>。</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>最近动作</h2>
+  {% if logs %}
+  <table>
+    <thead><tr><th>时间</th><th>对象</th><th>结果</th><th class="num">数量</th><th class="num">耗时</th><th>说明</th></tr></thead>
+    <tbody>
+      {% for l in logs %}
+      <tr>
+        <td class="muted">{{ l.at|ts }}</td>
+        <td><span class="tag">{{ l.kind }}/{{ l.ref_slug }}</span></td>
+        <td>{% if l.ok %}<span class="badge ok">成功</span>{% else %}<span class="badge err">失败</span>{% endif %}</td>
+        <td class="num">{{ l.counts or 0 }}</td>
+        <td class="num muted">{{ l.duration_ms or 0 }} ms</td>
+        <td class="muted" style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ l.message or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="panel-body muted">暂无记录。</div>
+  {% endif %}
+</div>
+
+{% endblock %}
