@@ -65,6 +65,54 @@ CREATE TABLE IF NOT EXISTS profile (
     updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS front_backends (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL UNIQUE,
+    kind            TEXT    NOT NULL DEFAULT 'socks5',
+    server          TEXT    NOT NULL,
+    port            INTEGER NOT NULL,
+    username        TEXT,
+    password        TEXT,
+    udp             INTEGER NOT NULL DEFAULT 1,
+    tls             INTEGER NOT NULL DEFAULT 0,
+    sni             TEXT,
+    skip_cert_verify INTEGER NOT NULL DEFAULT 0,
+    extra_yaml      TEXT,
+    note            TEXT,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS front_profiles (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug                  TEXT    NOT NULL UNIQUE,
+    name                  TEXT    NOT NULL,
+    enabled               INTEGER NOT NULL DEFAULT 1,
+    source_profile_id     INTEGER NOT NULL DEFAULT 1,
+    backend_group_name    TEXT    NOT NULL DEFAULT 'PROXY',
+    backend_group_type    TEXT    NOT NULL DEFAULT 'select',
+    include_direct        INTEGER NOT NULL DEFAULT 1,
+    group_defaults        TEXT    NOT NULL DEFAULT '',
+    custom_rules          TEXT    NOT NULL DEFAULT '',
+    base_mode             TEXT    NOT NULL DEFAULT 'auto',
+    base_url              TEXT    NOT NULL DEFAULT '',
+    base_template         TEXT    NOT NULL DEFAULT '',
+    rule_provider_proxy   TEXT    NOT NULL DEFAULT 'DIRECT',
+    token                 TEXT    NOT NULL DEFAULT '',
+    created_at            TEXT    NOT NULL,
+    updated_at            TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS front_profile_backends (
+    profile_id      INTEGER NOT NULL,
+    backend_id      INTEGER NOT NULL,
+    position        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (profile_id, backend_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_front_pb_profile ON front_profile_backends(profile_id);
+
 CREATE TABLE IF NOT EXISTS fetch_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     kind       TEXT    NOT NULL,
@@ -160,6 +208,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(rulesets)")}
     if "path" not in cols:
         conn.execute("ALTER TABLE rulesets ADD COLUMN path TEXT")
+
+    front_cols = {r["name"] for r in conn.execute("PRAGMA table_info(front_profiles)")}
+    if front_cols and "custom_rules" not in front_cols:
+        conn.execute("ALTER TABLE front_profiles ADD COLUMN custom_rules TEXT NOT NULL DEFAULT ''")
 
 
 # ---------- settings ----------

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block heading %}代理后端{% endblock %}
+{% block actions %}
+<a class="btn" href="/fronts">前置配置</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <h2>这些是什么</h2>
+  <div class="panel-body muted" style="font-size:13px">
+    前置配置里的 <code>PROXY</code> 分组就是从这里选后端：家里的 glash、外出的 F50 Pro 移动 WiFi，
+    都是跑完整 mihomo 配置的实例，只是 IP / 端口不同。这里只保存连接信息，
+    具体节点选择仍然在 glash 面板里完成。
+  </div>
+</div>
+
+<div class="panel">
+  <h2>新增后端</h2>
+  <div class="panel-body">
+    <form method="post" action="/backends/add">
+      <div class="grid4">
+        <div class="field">
+          <label>名称（会作为 mihomo proxy 名）</label>
+          <input type="text" name="name" required placeholder="glash-home">
+        </div>
+        <div class="field">
+          <label>类型</label>
+          <input type="text" name="kind" list="backend-kinds" value="socks5">
+          <datalist id="backend-kinds">
+            <option value="socks5"><option value="http"><option value="ss">
+            <option value="vmess"><option value="trojan"><option value="hysteria2">
+            <option value="tuic"><option value="wireguard">
+          </datalist>
+        </div>
+        <div class="field">
+          <label>Server</label>
+          <input type="text" name="server" required placeholder="192.168.3.2">
+        </div>
+        <div class="field">
+          <label>Port</label>
+          <input type="number" name="port" required min="1" max="65535" value="7893">
+        </div>
+      </div>
+      <div class="grid3">
+        <div class="field"><label>用户名（可选）</label><input type="text" name="username"></div>
+        <div class="field"><label>密码（可选）</label><input type="password" name="password"></div>
+        <div class="field"><label>备注 / 位置</label><input type="text" name="note" placeholder="家里 / 外出 F50 Pro"></div>
+      </div>
+      <div class="grid4">
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check"><input type="checkbox" name="udp" value="1" checked>UDP</label>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check"><input type="checkbox" name="tls" value="1">TLS</label>
+        </div>
+        <div class="field"><label>SNI（可选）</label><input type="text" name="sni"></div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check"><input type="checkbox" name="skip_cert_verify" value="1">跳过证书校验</label>
+        </div>
+      </div>
+      <div class="field">
+        <label>高级 YAML（可选，合并进 mihomo proxy 字典）</label>
+        <textarea name="extra_yaml" rows="4" placeholder="例如：&#10;flow: xtls-rprx-vision&#10;client-fingerprint: chrome"></textarea>
+      </div>
+      <button class="primary" type="submit">添加</button>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>已添加（{{ backends|length }}）</h2>
+  {% if backends %}
+  <table>
+    <thead>
+      <tr><th>名称</th><th>类型</th><th>地址</th><th>UDP</th><th>备注</th><th>被引用</th><th class="right">操作</th></tr>
+    </thead>
+    <tbody>
+      {% for b in backends %}
+      <tr>
+        <td>
+          <a href="/backends/{{ b.id }}">{{ b.name }}</a>
+          {% if not b.enabled %}<span class="badge warn">已禁用</span>{% endif %}
+        </td>
+        <td class="muted">{{ b.kind }}</td>
+        <td class="mono">{{ b.server }}:{{ b.port }}</td>
+        <td class="muted">{{ '是' if b.udp else '否' }}</td>
+        <td class="muted">{{ b.note or '' }}</td>
+        <td class="muted">
+          {% for p in usage.get(b.id, []) %}<a href="/fronts/{{ p.id }}">{{ p.name }}</a>{% if not loop.last %}、{% endif %}{% else %}—{% endfor %}
+        </td>
+        <td class="right"><a class="btn tiny" href="/backends/{{ b.id }}">编辑</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="panel-body muted">还没有后端。先添加家里的 glash，或外出的 F50 Pro。</div>
+  {% endif %}
+</div>
+
+{% endblock %}

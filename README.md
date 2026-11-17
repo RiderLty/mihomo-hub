@@ -79,6 +79,8 @@ uv run run.py    # 启动，监听 8091
    留空则自动检测：优先用反向代理传来的 `Forwarded` / `X-Forwarded-*`，最后才用当前访问的 Host。
    这一步决定了骨架里 provider / ruleset 的地址，客户端从外网访问时务必填对。
 5. 把 `<对外地址>/profile.yaml` 填进 mihomo 客户端订阅。
+6. （可选）**代理后端** → **前置配置**：给路由器 / 边缘设备生成两层分流配置。
+   规则复制 NAS 骨架，每个分类在路由器上只选 `PROXY` / `DIRECT`，后端池里选 glash / F50 Pro。
 
 ### 端点
 
@@ -87,8 +89,37 @@ uv run run.py    # 启动，监听 8091
 | `GET /profile.yaml` | 骨架（`{{base}}` 已替换为实际地址），客户端订阅这个 |
 | `GET /api/providers/<slug>.yaml` | 机场缓存，**只有 proxies 段** |
 | `GET /api/rulesets/<slug>.list` | 规则集原文（`text/plain`） |
+| `GET /api/fronts/<slug>.yaml` | 前置配置（路由器/边缘设备），可选 `?token=` |
 | `GET /api/status` | JSON 状态，方便接监控 |
 | `GET /healthz` | 健康检查 |
+
+## 前置配置（两层分流）
+
+用于「路由器 OpenClash + NAS glash」这类两层结构：
+
+- NAS 跑完整骨架，负责节点选择和细分流；
+- 路由器只负责粗决策，把需要代理的流量交给 NAS；
+- 两边用同一套规则：路由器上的每个分类分组（`TraeAI`、`Streaming`、`Apple`……）
+  成员只有 `PROXY` 和 `DIRECT`。路由器上选一次是否交给 NAS，glash 同名分组里再选一次具体节点。
+
+面板新增两页：
+
+- **代理后端**：管理后端地址。家里的 glash、外出的 F50 Pro 等都是跑完整配置的实例，
+  只是 `server` / `port` 不同；一个前端配置可以多选，运行时在 `PROXY` 分组里手动切换。
+- **前置配置**：规则完全复制 NAS 骨架（不改目标和顺序），只把每个分类分组的成员收敛成
+  `[PROXY, DIRECT]`。默认值按 NAS 分组第一项推断：NAS 首项是 `DIRECT` 就默认直连，
+  否则默认 `PROXY`。这样直连分类在路由器就结束，不会进 NAS，也不消耗 F50 流量。
+  每台设备还可以加自己的附加规则（源 IP、BT 端口、IPv6 直连等），插在 NAS 规则之前。
+
+订阅地址形如：
+
+```text
+http://192.168.3.3:8091/api/fronts/home-router.yaml?token=...
+```
+
+把这条填进路由器 OpenClash 的配置订阅即可。`token` 在面板里生成，可随时重置；
+前置配置的 hub 地址支持 `auto`（按订阅请求地址，推荐内网订阅）、`global` 和 `custom`。
+
 
 ## 环境变量
 
@@ -155,6 +186,7 @@ location / {
 
 - 只服务支持 `proxy-providers` 的客户端（mihomo / Clash Meta 系）。
 - 服务端不做鉴权，请只在可信网络里暴露，或自己在前面加一层反代认证。
+- 前置配置里含后端地址和账号密码，请使用面板生成的 token，别把订阅地址公开。
 - `SRC-IP-CIDR` 类规则依赖客户端能看到的真实源 IP；如果链路上还有一层 NAT，会失效。
 - 规则集只存原文不解析，格式写错时 mihomo 会静默加载 0 条——`behavior` / `format` 要填对。
 
@@ -166,6 +198,7 @@ app/
   db.py         SQLite schema 与读写
   fetch.py      抓取 / 解析 / 缓存 / 差异统计
   profile.py    骨架模板、渲染、校验
+  front.py      前置配置生成（规则复制、分类 shim、后端池）
   urls.py       对外地址解析（面板配置 / 反代头 / 自动检测）
   scheduler.py  后台定时刷新
   main.py       路由与 Web UI

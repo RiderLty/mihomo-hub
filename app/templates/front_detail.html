@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block heading %}{{ f.name }}{% endblock %}
+{% block actions %}
+<a class="btn" href="/fronts/{{ f.id }}/download">下载 YAML</a>
+<a class="btn" href="/fronts">返回列表</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <h2>客户端订阅地址</h2>
+  <div class="panel-body">
+    <div class="copy-row">
+      <div class="code" id="suburl">{{ sub_url }}</div>
+      <button class="tiny" data-copy="#suburl">复制</button>
+      <a class="btn tiny" href="/api/fronts/{{ f.slug }}.yaml{% if f.token %}?token={{ f.token }}{% endif %}" target="_blank">看渲染结果</a>
+    </div>
+    <div class="hint">
+      当前使用地址：<code>{{ base }}</code>
+      （自动检测 <code>{{ detected_base }}</code>，全局设置 <code>{{ global_base }}</code>）。
+      路由器访问 hub 时建议用内网地址，这样规则集下载也不会绕公网。
+    </div>
+    <div class="hint">
+      当前访问令牌：<code>{{ f.token or '（未启用）' }}</code>
+      <form method="post" action="/fronts/{{ f.id }}/token" style="display:inline">
+        <button class="tiny" type="submit" data-confirm="重新生成后，旧订阅地址会失效，确定？">重新生成</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% if issues %}
+<div class="panel">
+  <h2>检查结果（{{ issues|length }}）</h2>
+  <div class="panel-body">
+    <ul class="issues">
+      {% for i in issues %}
+      <li class="{{ i.level }}">{{ i.message }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
+
+<form method="post" action="/fronts/{{ f.id }}/update">
+  <div class="panel">
+    <h2>基础</h2>
+    <div class="panel-body">
+      <div class="grid3">
+        <div class="field">
+          <label>名称</label>
+          <input type="text" name="name" value="{{ f.name }}" required>
+        </div>
+        <div class="field">
+          <label>标识（slug）</label>
+          <input type="text" name="slug" value="{{ f.slug }}">
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check">
+            <input type="checkbox" name="enabled" value="1" {{ 'checked' if f.enabled }}>启用
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <label>后端（可多选，PROXY 分组按此顺序；禁用的后端不会生成）</label>
+        <select name="backend_ids" multiple size="7">
+          {% for b in backends %}
+          <option value="{{ b.id }}" {{ 'selected' if b.id in selected_ids }}>
+            {{ b.name }}（{{ b.kind }} {{ b.server }}:{{ b.port }}{% if not b.enabled %}，已禁用{% endif %}）
+          </option>
+          {% endfor %}
+        </select>
+        <div class="hint">在 <a href="/backends">代理后端</a> 里管理地址；家里 glash、外出 F50 Pro 都放这里。</div>
+      </div>
+      <div class="grid4">
+        <div class="field">
+          <label>后端分组名</label>
+          <input type="text" name="backend_group_name" value="{{ f.backend_group_name }}">
+        </div>
+        <div class="field">
+          <label>分组类型</label>
+          <select name="backend_group_type">
+            {% for t in group_types %}
+            <option value="{{ t }}" {{ 'selected' if f.backend_group_type == t }}>{{ t }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check">
+            <input type="checkbox" name="include_direct" value="1" {{ 'checked' if f.include_direct }}>
+            分组里追加 DIRECT
+          </label>
+        </div>
+        <div class="field">
+          <label>规则集下载代理</label>
+          <select name="rule_provider_proxy">
+            <option value="DIRECT" {{ 'selected' if f.rule_provider_proxy == 'DIRECT' }}>DIRECT</option>
+            <option value="{{ f.backend_group_name }}" {{ 'selected' if f.rule_provider_proxy == f.backend_group_name }}>{{ f.backend_group_name }}</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Hub 地址</h2>
+    <div class="panel-body">
+      <div class="grid2">
+        <div class="field">
+          <label>模式</label>
+          <select name="base_mode">
+            <option value="auto" {{ 'selected' if f.base_mode == 'auto' }}>auto：按订阅请求的地址</option>
+            <option value="global" {{ 'selected' if f.base_mode == 'global' }}>global：使用面板「设置」里的对外地址</option>
+            <option value="custom" {{ 'selected' if f.base_mode == 'custom' }}>custom：下面手填</option>
+          </select>
+          <div class="hint">auto 最省事：路由器用内网地址订阅，生成的规则集地址也是内网。</div>
+        </div>
+        <div class="field">
+          <label>自定义地址（custom 时使用）</label>
+          <input type="text" name="base_url" value="{{ f.base_url }}" placeholder="例如 http://192.168.3.3:8091">
+        </div>
+      </div>
+      <div class="hint">当前自动检测：<code>{{ detected_base }}</code>；全局：<code>{{ global_base }}</code>。</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>分类分组默认值</h2>
+    <div class="panel-body">
+      {% if target_groups %}
+      <table>
+        <thead>
+          <tr><th>分类分组</th><th>NAS 首项</th><th class="num">引用规则</th><th>默认出口</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          {% for g in target_groups %}
+          <tr>
+            <td>
+              <span class="mono">{{ g.name }}</span>
+              <input type="hidden" name="group_name" value="{{ g.name }}">
+              {% if not g.known %}<span class="badge warn">源里未定义</span>{% endif %}
+            </td>
+            <td class="muted mono">{{ g.source_first }}</td>
+            <td class="num">{{ g.count }}</td>
+            <td>
+              <select name="group_default">
+                <option value="" {{ 'selected' if not g.override }}>跟随 NAS（当前 {{ g.heuristic }}）</option>
+                <option value="PROXY" {{ 'selected' if g.override == 'PROXY' }}>PROXY</option>
+                <option value="DIRECT" {{ 'selected' if g.override == 'DIRECT' }}>DIRECT</option>
+              </select>
+            </td>
+            <td class="muted">生成时使用 {{ g.effective }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="hint">
+        规则本身完全复制 NAS，不改目标；这里只是每个分类在路由器上的默认选择。
+        运行时在路由器 Dashboard 里还能继续切换，选择会由 store-selected 记住。
+      </div>
+      {% else %}
+      <div class="muted">NAS 骨架还没有可用的 rules / proxy-groups，先去<a href="/profile">配置骨架</a>生成。</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>附加规则</h2>
+    <div class="panel-body">
+      <div class="field">
+        <textarea name="custom_rules" rows="8" spellcheck="false"
+                  placeholder="SRC-IP-CIDR,192.168.3.2/32,DIRECT&#10;DST-PORT,6881-6889,DIRECT&#10;IP-CIDR6,2400:3200::/32,DIRECT,no-resolve">{{ f.custom_rules }}</textarea>
+        <div class="hint">
+          每行一条，插在 NAS 规则之前；目标可以写分类分组名、<code>PROXY</code>、<code>DIRECT</code> 或 <code>REJECT</code>。
+          后端和 hub 自身的直连规则会自动加，不用重复写。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>基础模板</h2>
+    <div class="panel-body">
+      <div class="field">
+        <textarea name="base_template" rows="30" spellcheck="false">{{ f.base_template }}</textarea>
+        <div class="hint">
+          端口、DNS、sniffer 等非动态配置。生成时会替换其中的
+          <code>proxies</code> / <code>proxy-groups</code> / <code>rule-providers</code> / <code>rules</code>
+          四段，并删除 <code>proxy-providers</code>。
+        </div>
+      </div>
+      <div class="row">
+        <button class="primary" type="submit">保存</button>
+        <span class="spacer"></span>
+        <button class="ghost" type="submit" formaction="/fronts/{{ f.id }}/reset-template"
+                formnovalidate data-confirm="会覆盖当前基础模板，确定？">重置为默认模板</button>
+      </div>
+    </div>
+  </div>
+</form>
+
+<div class="panel">
+  <h2>生成预览</h2>
+  <div class="panel-body">
+    {% if preview %}
+    <pre style="max-height:520px">{{ preview|join('\n') }}</pre>
+    <div class="hint">只显示前 {{ preview|length }} 行；完整内容可点右上角「下载 YAML」。</div>
+    {% elif issues %}
+    <div class="muted">生成失败，先处理上面的检查结果。</div>
+    {% else %}
+    <div class="muted">暂无预览。</div>
+    {% endif %}
+  </div>
+</div>
+
+<form method="post" action="/fronts/{{ f.id }}/delete" data-confirm="确定删除这个前置配置？" style="margin:0">
+  <button class="danger" type="submit">删除前置配置</button>
+</form>
+
+{% endblock %}

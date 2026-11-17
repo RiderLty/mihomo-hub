@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block heading %}{{ b.name }}{% endblock %}
+{% block actions %}
+<a class="btn" href="/backends">返回列表</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <h2>被引用</h2>
+  <div class="panel-body">
+    {% if usage %}
+    <p style="margin-top:0">这个后端正在被以下前置配置使用：</p>
+    <ul class="issues">
+      {% for p in usage %}
+      <li class="warn"><a href="/fronts/{{ p.id }}">{{ p.name }}</a></li>
+      {% endfor %}
+    </ul>
+    <div class="hint">要删除后端，先从这些前置配置里取消勾选。</div>
+    {% else %}
+    <div class="muted">暂时没有被任何前置配置引用。</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <h2>编辑</h2>
+  <div class="panel-body">
+    <form method="post" action="/backends/{{ b.id }}/update">
+      <div class="grid4">
+        <div class="field">
+          <label>名称（会作为 mihomo proxy 名）</label>
+          <input type="text" name="name" value="{{ b.name }}" required>
+        </div>
+        <div class="field">
+          <label>类型</label>
+          <input type="text" name="kind" list="backend-kinds" value="{{ b.kind }}">
+          <datalist id="backend-kinds">
+            <option value="socks5"><option value="http"><option value="ss">
+            <option value="vmess"><option value="trojan"><option value="hysteria2">
+            <option value="tuic"><option value="wireguard">
+          </datalist>
+        </div>
+        <div class="field">
+          <label>Server</label>
+          <input type="text" name="server" value="{{ b.server }}" required>
+        </div>
+        <div class="field">
+          <label>Port</label>
+          <input type="number" name="port" value="{{ b.port }}" min="1" max="65535" required>
+        </div>
+      </div>
+      <div class="grid3">
+        <div class="field"><label>用户名（可选）</label><input type="text" name="username" value="{{ b.username or '' }}"></div>
+        <div class="field"><label>密码（可选）</label><input type="password" name="password" value="{{ b.password or '' }}"></div>
+        <div class="field"><label>备注 / 位置</label><input type="text" name="note" value="{{ b.note or '' }}"></div>
+      </div>
+      <div class="grid4">
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check"><input type="checkbox" name="udp" value="1" {{ 'checked' if b.udp }}>UDP</label>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check"><input type="checkbox" name="tls" value="1" {{ 'checked' if b.tls }}>TLS</label>
+        </div>
+        <div class="field"><label>SNI（可选）</label><input type="text" name="sni" value="{{ b.sni or '' }}"></div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <label class="check"><input type="checkbox" name="skip_cert_verify" value="1" {{ 'checked' if b.skip_cert_verify }}>跳过证书校验</label>
+        </div>
+      </div>
+      <div class="field">
+        <label>高级 YAML（可选，合并进 mihomo proxy 字典，name 会被忽略）</label>
+        <textarea name="extra_yaml" rows="5">{{ b.extra_yaml or '' }}</textarea>
+      </div>
+      <div class="field">
+        <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if b.enabled }}>启用</label>
+      </div>
+      <button class="primary" type="submit">保存</button>
+    </form>
+  </div>
+</div>
+
+<form method="post" action="/backends/{{ b.id }}/delete" data-confirm="确定删除这个后端？" style="margin:0">
+  <button class="danger" type="submit" {{ 'disabled' if usage }}>删除后端</button>
+</form>
+{% if usage %}<div class="hint">仍被前置配置引用，不能删除。</div>{% endif %}
+
+{% endblock %}

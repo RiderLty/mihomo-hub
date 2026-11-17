@@ -29,6 +29,16 @@ document.addEventListener('click', (e) => {
   target.focus();
 });
 
+// 危险操作二次确认（按钮级，配合 formaction 使用）
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-confirm]');
+  if (!btn) return;
+  if (!confirm(btn.getAttribute('data-confirm'))) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+});
+
 // 危险操作二次确认
 document.addEventListener('submit', (e) => {
   const form = e.target;

@@ -6,7 +6,9 @@
 """
 from __future__ import annotations
 
+import json
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -17,7 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db, profile as profile_mod, urls
+from . import db, front as front_mod, profile as profile_mod, urls
 from .config import APP_NAME, APP_VERSION
 from .fetch import refresh_ruleset, refresh_source
 from .scheduler import loop as scheduler_loop
@@ -105,6 +107,64 @@ def _slug_taken(table: str, slug: str, exclude_id: int | None = None) -> bool:
     else:
         row = db.query_one(f"SELECT id FROM {table} WHERE slug = ? AND id != ?", (slug, exclude_id))
     return row is not None
+
+
+# ---------------------------------------------------------------- front helpers
+
+def _json_dict(value) -> dict:
+    if not value:
+        return {}
+    try:
+        data = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _front_row(row) -> dict:
+    data = dict(row)
+    data["group_defaults"] = _json_dict(data.get("group_defaults"))
+    return data
+
+
+def _front_backends(profile_id: int):
+    return db.query(
+        "SELECT b.* FROM front_backends b"
+        " JOIN front_profile_backends pb ON pb.backend_id = b.id"
+        " WHERE pb.profile_id = ? ORDER BY pb.position, b.id",
+        (profile_id,),
+    )
+
+
+def _save_front_backends(conn, profile_id: int, backend_ids) -> None:
+    conn.execute("DELETE FROM front_profile_backends WHERE profile_id = ?", (profile_id,))
+    seen: set[int] = set()
+    position = 0
+    for raw in backend_ids or []:
+        try:
+            backend_id = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if backend_id in seen:
+            continue
+        exists = conn.execute("SELECT id FROM front_backends WHERE id = ?", (backend_id,)).fetchone()
+        if exists is None:
+            continue
+        seen.add(backend_id)
+        conn.execute(
+            "INSERT INTO front_profile_backends(profile_id, backend_id, position) VALUES(?,?,?)",
+            (profile_id, backend_id, position),
+        )
+        position += 1
+
+
+def _backend_usage(backend_id: int):
+    return db.query(
+        "SELECT p.id, p.name, p.slug FROM front_profiles p"
+        " JOIN front_profile_backends pb ON pb.profile_id = p.id"
+        " WHERE pb.backend_id = ? ORDER BY p.id",
+        (backend_id,),
+    )
 
 
 def _nodes_of(content: str | None) -> list[dict]:
@@ -551,6 +611,364 @@ async def profile_download(request: Request):
     rendered = profile_mod.render(db.get_profile(), base_url(request))
     return Response(rendered, media_type="text/yaml; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="config.yaml"'})
+
+
+# ---------------------------------------------------------------- front profiles
+
+@app.get("/fronts", response_class=HTMLResponse)
+async def fronts_page(request: Request):
+    rows = db.query("SELECT * FROM front_profiles ORDER BY id")
+    fronts = []
+    for row in rows:
+        f = _front_row(row)
+        f["_base"] = front_mod.front_base(request, f)
+        f["_backends"] = _front_backends(f["id"])
+        f["_sub_url"] = front_mod.subscription_url(f["_base"], f["slug"], f["token"])
+        fronts.append(f)
+    return render(
+        request, "fronts.html",
+        fronts=fronts,
+        backends=db.query("SELECT * FROM front_backends WHERE enabled = 1 ORDER BY name"),
+        detected_base=urls.detect_base_url(request),
+    )
+
+
+@app.post("/fronts/add")
+async def front_add(
+    name: str = Form(...),
+    slug: str = Form(""),
+    backend_group_name: str = Form("PROXY"),
+    backend_ids: list[int] = Form([]),
+):
+    name = name.strip()
+    if not name:
+        return go("/fronts", err="名称不能为空")
+    group_name = (
+        backend_group_name or front_mod.DEFAULT_BACKEND_GROUP
+    ).strip() or front_mod.DEFAULT_BACKEND_GROUP
+    if not front_mod.valid_group_name(group_name):
+        return go("/fronts", err=f"后端分组名不合法：{group_name}")
+
+    want = slugify(slug or name, "front")
+    final = ensure_unique(want, lambda s: _slug_taken("front_profiles", s))
+    now = db.now_iso()
+    with db.tx() as conn:
+        cur = conn.execute(
+            "INSERT INTO front_profiles(slug, name, enabled, source_profile_id, backend_group_name,"
+            " backend_group_type, include_direct, group_defaults, base_mode, base_url, base_template,"
+            " rule_provider_proxy, token, created_at, updated_at)"
+            " VALUES(?,?,1,1,?,?,1,'','auto','',?, 'DIRECT', ?, ?, ?)",
+            (final, name, group_name, front_mod.DEFAULT_GROUP_TYPE,
+             front_mod.DEFAULT_BASE_TEMPLATE, secrets.token_urlsafe(24), now, now),
+        )
+        fid = cur.lastrowid
+        _save_front_backends(conn, fid, backend_ids)
+    return go(f"/fronts/{fid}", msg="已创建，可以继续调整分类默认值和基础模板")
+
+
+@app.get("/fronts/{fid}", response_class=HTMLResponse)
+async def front_detail(request: Request, fid: int):
+    row = db.query_one("SELECT * FROM front_profiles WHERE id = ?", (fid,))
+    if row is None:
+        return go("/fronts", err="前置配置不存在")
+
+    f = _front_row(row)
+    backends = _front_backends(fid)
+    source = db.get_profile()
+    base = front_mod.front_base(request, f)
+    groups, issues = front_mod.target_groups(source, f, base)
+
+    preview = None
+    try:
+        text = front_mod.render_front(f, backends, source, base)
+        preview = text.splitlines()
+        issues = issues + front_mod.validate_generated(text, f)
+    except front_mod.FrontError as exc:
+        issues.append({"level": "error", "message": str(exc)})
+
+    return render(
+        request, "front_detail.html",
+        f=f,
+        backends=db.query("SELECT * FROM front_backends ORDER BY name"),
+        selected_ids={b["id"] for b in backends},
+        target_groups=groups,
+        issues=issues,
+        preview=preview[:400] if preview else [],
+        sub_url=front_mod.subscription_url(base, f["slug"], f["token"]),
+        base=base,
+        detected_base=urls.detect_base_url(request),
+        global_base=urls.configured_base_url() or urls.detect_base_url(request),
+        group_types=["select", "fallback", "url-test", "load-balance"],
+    )
+
+
+@app.post("/fronts/{fid}/update")
+async def front_update(
+    request: Request,
+    fid: int,
+    name: str = Form(...),
+    slug: str = Form(""),
+    enabled: str = Form(""),
+    backend_group_name: str = Form("PROXY"),
+    backend_group_type: str = Form("select"),
+    include_direct: str = Form(""),
+    base_mode: str = Form("auto"),
+    base_url: str = Form(""),
+    base_template: str = Form(""),
+    rule_provider_proxy: str = Form("DIRECT"),
+    custom_rules: str = Form(""),
+    backend_ids: list[int] = Form([]),
+):
+    row = db.query_one("SELECT id FROM front_profiles WHERE id = ?", (fid,))
+    if row is None:
+        return go("/fronts", err="前置配置不存在")
+
+    name = name.strip()
+    if not name:
+        return go(f"/fronts/{fid}", err="名称不能为空")
+
+    group_name = (
+        backend_group_name or front_mod.DEFAULT_BACKEND_GROUP
+    ).strip() or front_mod.DEFAULT_BACKEND_GROUP
+    if not front_mod.valid_group_name(group_name):
+        return go(f"/fronts/{fid}", err=f"后端分组名不合法：{group_name}")
+
+    group_type = backend_group_type if backend_group_type in (
+        "select", "fallback", "url-test", "load-balance"
+    ) else front_mod.DEFAULT_GROUP_TYPE
+    mode = base_mode if base_mode in ("auto", "global", "custom") else "auto"
+    custom = (base_url or "").strip()
+    if mode == "custom" and custom:
+        try:
+            custom = urls.normalize_base_url(custom, urls.detect_scheme(request))
+        except ValueError as exc:
+            return go(f"/fronts/{fid}", err=f"自定义 hub 地址无效：{exc}")
+
+    template = base_template if (base_template or "").strip() else front_mod.DEFAULT_BASE_TEMPLATE
+    template_error = front_mod.check_base_template(template, urls.detect_base_url(request))
+    if template_error:
+        return go(f"/fronts/{fid}", err=f"基础模板无效：{template_error}")
+
+    provider_proxy = (rule_provider_proxy or "DIRECT").strip()
+    if provider_proxy not in ("DIRECT", group_name):
+        provider_proxy = "DIRECT"
+
+    form = await request.form()
+    overrides: dict[str, str] = {}
+    for gname, value in zip(form.getlist("group_name"), form.getlist("group_default")):
+        if value in ("PROXY", "DIRECT"):
+            overrides[str(gname)] = value
+
+    want = slugify(slug or name, "front")
+    final = ensure_unique(want, lambda s: _slug_taken("front_profiles", s, exclude_id=fid))
+    with db.tx() as conn:
+        conn.execute(
+            "UPDATE front_profiles SET slug=?, name=?, enabled=?, backend_group_name=?,"
+            " backend_group_type=?, include_direct=?, group_defaults=?, custom_rules=?,"
+            " base_mode=?, base_url=?, base_template=?, rule_provider_proxy=?, updated_at=?"
+            " WHERE id=?",
+            (final, name, 1 if enabled else 0, group_name, group_type,
+             1 if include_direct else 0, json.dumps(overrides, ensure_ascii=False),
+             custom_rules.strip(), mode, custom, template, provider_proxy, db.now_iso(), fid),
+        )
+        _save_front_backends(conn, fid, backend_ids)
+    return go(f"/fronts/{fid}", msg="已保存")
+
+
+@app.post("/fronts/{fid}/token")
+async def front_token(fid: int):
+    with db.tx() as conn:
+        conn.execute(
+            "UPDATE front_profiles SET token=?, updated_at=? WHERE id=?",
+            (secrets.token_urlsafe(24), db.now_iso(), fid),
+        )
+    return go(f"/fronts/{fid}", msg="已生成新的访问令牌，客户端订阅地址需要同步更新")
+
+
+@app.post("/fronts/{fid}/reset-template")
+async def front_reset_template(fid: int):
+    with db.tx() as conn:
+        conn.execute(
+            "UPDATE front_profiles SET base_template=?, updated_at=? WHERE id=?",
+            (front_mod.DEFAULT_BASE_TEMPLATE, db.now_iso(), fid),
+        )
+    return go(f"/fronts/{fid}", msg="基础模板已恢复为默认值")
+
+
+@app.post("/fronts/{fid}/delete")
+async def front_delete(fid: int):
+    with db.tx() as conn:
+        conn.execute("DELETE FROM front_profile_backends WHERE profile_id = ?", (fid,))
+        conn.execute("DELETE FROM front_profiles WHERE id = ?", (fid,))
+    return go("/fronts", msg="已删除")
+
+
+@app.get("/fronts/{fid}/download")
+async def front_download(request: Request, fid: int):
+    row = db.query_one("SELECT * FROM front_profiles WHERE id = ?", (fid,))
+    if row is None:
+        return go("/fronts", err="前置配置不存在")
+    f = _front_row(row)
+    base = front_mod.front_base(request, f)
+    try:
+        text = front_mod.render_front(f, _front_backends(fid), db.get_profile(), base)
+    except front_mod.FrontError as exc:
+        return PlainTextResponse(f"# 生成失败：{exc}\n", status_code=500)
+    return Response(
+        text, media_type="text/yaml; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{f["slug"]}.yaml"'},
+    )
+
+
+@app.get("/api/fronts/{slug}.yaml")
+async def front_yaml(request: Request, slug: str, token: str = ""):
+    row = db.query_one("SELECT * FROM front_profiles WHERE slug = ? AND enabled = 1", (slug,))
+    if row is None:
+        return PlainTextResponse("# 前置配置不存在或已禁用\n", status_code=404)
+    f = _front_row(row)
+    if f["token"] and not secrets.compare_digest(str(token), str(f["token"])):
+        return PlainTextResponse("# token 无效\n", status_code=404)
+    base = front_mod.front_base(request, f)
+    try:
+        text = front_mod.render_front(f, _front_backends(f["id"]), db.get_profile(), base)
+    except front_mod.FrontError as exc:
+        return PlainTextResponse(f"# 生成失败：{exc}\n", status_code=500)
+    return Response(text, media_type="text/yaml; charset=utf-8", headers={"Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------------- backends
+
+@app.get("/backends", response_class=HTMLResponse)
+async def backends_page(request: Request):
+    rows = db.query("SELECT * FROM front_backends ORDER BY name")
+    usage = {row["id"]: _backend_usage(row["id"]) for row in rows}
+    return render(request, "backends.html", backends=rows, usage=usage)
+
+
+@app.post("/backends/add")
+async def backend_add(
+    name: str = Form(...),
+    kind: str = Form("socks5"),
+    server: str = Form(...),
+    port: int = Form(...),
+    username: str = Form(""),
+    password: str = Form(""),
+    note: str = Form(""),
+    sni: str = Form(""),
+    udp: str = Form(""),
+    tls: str = Form(""),
+    skip_cert_verify: str = Form(""),
+    extra_yaml: str = Form(""),
+):
+    name = name.strip()
+    server = server.strip()
+    if not name or not server:
+        return go("/backends", err="名称和 server 不能为空")
+    if not front_mod.valid_backend_name(name):
+        return go("/backends", err=f"后端名称不合法：{name}")
+    if not 0 < port < 65536:
+        return go("/backends", err="端口必须在 1-65535 之间")
+    if db.query_one("SELECT id FROM front_backends WHERE name = ?", (name,)):
+        return go("/backends", err=f"后端名称已存在：{name}")
+
+    extra = (extra_yaml or "").strip()
+    if extra:
+        try:
+            data = yaml.safe_load(extra)
+        except Exception as exc:  # noqa: BLE001
+            return go("/backends", err=f"高级 YAML 解析失败：{exc}")
+        if data is not None and not isinstance(data, dict):
+            return go("/backends", err="高级 YAML 必须是映射")
+
+    now = db.now_iso()
+    with db.tx() as conn:
+        cur = conn.execute(
+            "INSERT INTO front_backends(name, kind, server, port, username, password, udp, tls, sni,"
+            " skip_cert_verify, extra_yaml, note, enabled, created_at, updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+            (name, kind.strip() or "socks5", server, port, username.strip() or None,
+             password or None, 1 if udp else 0, 1 if tls else 0, sni.strip() or None,
+             1 if skip_cert_verify else 0, extra or None, note.strip() or None, now, now),
+        )
+        bid = cur.lastrowid
+    return go(f"/backends/{bid}", msg="已添加")
+
+
+@app.get("/backends/{bid}", response_class=HTMLResponse)
+async def backend_detail(request: Request, bid: int):
+    row = db.query_one("SELECT * FROM front_backends WHERE id = ?", (bid,))
+    if row is None:
+        return go("/backends", err="后端不存在")
+    return render(request, "backend_detail.html", b=row, usage=_backend_usage(bid))
+
+
+@app.post("/backends/{bid}/update")
+async def backend_update(
+    bid: int,
+    name: str = Form(...),
+    kind: str = Form("socks5"),
+    server: str = Form(...),
+    port: int = Form(...),
+    username: str = Form(""),
+    password: str = Form(""),
+    note: str = Form(""),
+    sni: str = Form(""),
+    udp: str = Form(""),
+    tls: str = Form(""),
+    skip_cert_verify: str = Form(""),
+    extra_yaml: str = Form(""),
+    enabled: str = Form(""),
+):
+    row = db.query_one("SELECT id FROM front_backends WHERE id = ?", (bid,))
+    if row is None:
+        return go("/backends", err="后端不存在")
+    name = name.strip()
+    server = server.strip()
+    if not name or not server:
+        return go(f"/backends/{bid}", err="名称和 server 不能为空")
+    if not front_mod.valid_backend_name(name):
+        return go(f"/backends/{bid}", err=f"后端名称不合法：{name}")
+    if not 0 < port < 65536:
+        return go(f"/backends/{bid}", err="端口必须在 1-65535 之间")
+    other = db.query_one("SELECT id FROM front_backends WHERE name = ? AND id != ?", (name, bid))
+    if other is not None:
+        return go(f"/backends/{bid}", err=f"后端名称已存在：{name}")
+
+    extra = (extra_yaml or "").strip()
+    if extra:
+        try:
+            data = yaml.safe_load(extra)
+        except Exception as exc:  # noqa: BLE001
+            return go(f"/backends/{bid}", err=f"高级 YAML 解析失败：{exc}")
+        if data is not None and not isinstance(data, dict):
+            return go(f"/backends/{bid}", err="高级 YAML 必须是映射")
+
+    with db.tx() as conn:
+        conn.execute(
+            "UPDATE front_backends SET name=?, kind=?, server=?, port=?, username=?, password=?,"
+            " udp=?, tls=?, sni=?, skip_cert_verify=?, extra_yaml=?, note=?, enabled=?, updated_at=?"
+            " WHERE id=?",
+            (name, kind.strip() or "socks5", server, port, username.strip() or None,
+             password or None, 1 if udp else 0, 1 if tls else 0, sni.strip() or None,
+             1 if skip_cert_verify else 0, extra or None, note.strip() or None,
+             1 if enabled else 0, db.now_iso(), bid),
+        )
+    return go(f"/backends/{bid}", msg="已保存")
+
+
+@app.post("/backends/{bid}/delete")
+async def backend_delete(bid: int):
+    row = db.query_one("SELECT id FROM front_backends WHERE id = ?", (bid,))
+    if row is None:
+        return go("/backends", err="后端不存在")
+    usage = _backend_usage(bid)
+    if usage:
+        names = "、".join(str(u["name"]) for u in usage)
+        return go(f"/backends/{bid}", err=f"这个后端仍被前置配置使用：{names}")
+    with db.tx() as conn:
+        conn.execute("DELETE FROM front_profile_backends WHERE backend_id = ?", (bid,))
+        conn.execute("DELETE FROM front_backends WHERE id = ?", (bid,))
+    return go("/backends", msg="已删除")
 
 
 # ---------------------------------------------------------------- machine endpoints

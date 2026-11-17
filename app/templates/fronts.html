@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block heading %}前置配置{% endblock %}
+{% block actions %}
+<a class="btn" href="/backends">代理后端</a>
+{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <h2>两层分流</h2>
+  <div class="panel-body muted" style="font-size:13px">
+    前置配置给路由器 / 边缘设备使用：规则完全复制 NAS 骨架，每个分类分组的成员只有
+    <code>PROXY</code> 和 <code>DIRECT</code>。
+    路由器上选一次（这个分类是否交给 NAS），glash 面板里同名分组再选一次（具体节点）。
+    默认跟 NAS 分组一致，直连分类不会进 NAS，也不会消耗 F50 的流量。
+  </div>
+</div>
+
+<div class="panel">
+  <h2>新建前置配置</h2>
+  <div class="panel-body">
+    <form method="post" action="/fronts/add">
+      <div class="grid3">
+        <div class="field">
+          <label>名称</label>
+          <input type="text" name="name" required placeholder="例如 家里路由器">
+        </div>
+        <div class="field">
+          <label>标识（slug，可留空）</label>
+          <input type="text" name="slug" placeholder="home-router">
+        </div>
+        <div class="field">
+          <label>后端分组名</label>
+          <input type="text" name="backend_group_name" value="PROXY">
+        </div>
+      </div>
+      <div class="field">
+        <label>后端（可多选，PROXY 分组里按这个顺序排列）</label>
+        <select name="backend_ids" multiple size="6">
+          {% for b in backends %}
+          <option value="{{ b.id }}">{{ b.name }}（{{ b.kind }} {{ b.server }}:{{ b.port }}）</option>
+          {% endfor %}
+        </select>
+        <div class="hint">
+          没有后端？先去 <a href="/backends">代理后端</a> 添加 glash / F50 Pro 等地址。
+          当前自动检测到的 hub 地址：<code>{{ detected_base }}</code>
+        </div>
+      </div>
+      <button class="primary" type="submit">创建</button>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>已配置（{{ fronts|length }}）</h2>
+  {% if fronts %}
+  <table>
+    <thead>
+      <tr><th>名称</th><th>后端</th><th>分组</th><th>订阅地址</th><th class="right">操作</th></tr>
+    </thead>
+    <tbody>
+      {% for f in fronts %}
+      <tr>
+        <td>
+          <a href="/fronts/{{ f.id }}">{{ f.name }}</a>
+          {% if not f.enabled %}<span class="badge warn">已禁用</span>{% endif %}
+          <div class="tag">/{{ f.slug }}</div>
+        </td>
+        <td class="muted">
+          {% for b in f._backends %}{{ b.name }}{% if not loop.last %}、{% endif %}{% else %}—{% endfor %}
+        </td>
+        <td class="muted">{{ f.backend_group_name }} / {{ f.backend_group_type }}</td>
+        <td>
+          <div class="copy-row">
+            <div class="code" id="furl-{{ f.id }}">{{ f._sub_url }}</div>
+            <button class="tiny" data-copy="#furl-{{ f.id }}">复制</button>
+          </div>
+        </td>
+        <td class="right"><a class="btn tiny" href="/fronts/{{ f.id }}">编辑</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="panel-body muted">还没有前置配置。</div>
+  {% endif %}
+</div>
+
+{% endblock %}
