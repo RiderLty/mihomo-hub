@@ -26,6 +26,24 @@
         <button class="tiny" type="submit" data-confirm="重新生成后，旧订阅地址会失效，确定？">重新生成</button>
       </form>
     </div>
+    <div class="hint">
+      部署脚本：<a href="{{ deploy_url }}" target="_blank">deploy.sh</a>（含 SUB_URL + token，重启命令按需修改）
+      {% if api_url %}
+      · 边缘 API：<code>{{ api_url }}</code>（zashboard 后端填这个）
+      {% else %}
+      · 边缘 API：设置下面的「边缘设备地址」后显示
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>规则集 URL 检测</h2>
+  <div class="panel-body">
+    <button class="tiny" type="button" data-check-providers="{{ f.id }}"
+            data-check-target="#provider-check">检测 rule-provider URL</button>
+    <div class="hint">从 hub 当前网络 HEAD/GET 每个规则集地址，结果缓存 60 秒；内网 / 公网地址切换后结果可能不同。</div>
+    <pre id="provider-check" style="margin-top:10px;min-height:20px">未检测</pre>
   </div>
 </div>
 
@@ -46,7 +64,7 @@
   <div class="panel">
     <h2>基础</h2>
     <div class="panel-body">
-      <div class="grid3">
+      <div class="grid4">
         <div class="field">
           <label>名称</label>
           <input type="text" name="name" value="{{ f.name }}" required>
@@ -56,18 +74,47 @@
           <input type="text" name="slug" value="{{ f.slug }}">
         </div>
         <div class="field">
+          <label>角色</label>
+          <select name="role">
+            <option value="relay" {{ 'selected' if f.role == 'relay' }}>relay（TPROXY 中继，不接管 DNS）</option>
+            <option value="gateway" {{ 'selected' if f.role == 'gateway' }}>gateway（旁路由网关，fake-ip）</option>
+          </select>
+        </div>
+        <div class="field">
           <label>&nbsp;</label>
           <label class="check">
             <input type="checkbox" name="enabled" value="1" {{ 'checked' if f.enabled }}>启用
           </label>
         </div>
       </div>
+      <div class="grid4">
+        <div class="field">
+          <label>边缘设备地址（用于显示 API）</label>
+          <input type="text" name="edge_host" value="{{ f.edge_host }}" placeholder="例如 192.168.3.1">
+        </div>
+        <div class="field">
+          <label>API 端口</label>
+          <input type="number" name="api_port" value="{{ f.api_port }}" min="1" max="65535">
+        </div>
+        <div class="field">
+          <label>TPROXY 端口</label>
+          <input type="number" name="tproxy_port" value="{{ f.tproxy_port }}" min="1" max="65535">
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button class="ghost" type="submit" formaction="/fronts/{{ f.id }}/role-template"
+                  formnovalidate data-confirm="会用当前角色的默认模板覆盖基础模板，确定？">应用角色默认模板</button>
+        </div>
+      </div>
+      <div class="hint">
+        relay 角色会输出 <code>tproxy-port</code>、不写 fake-ip，必须开 sniffer；gateway 使用 fake-ip。
+      </div>
       <div class="field">
         <label>后端（可多选，PROXY 分组按此顺序；禁用的后端不会生成）</label>
         <select name="backend_ids" multiple size="7">
           {% for b in backends %}
           <option value="{{ b.id }}" {{ 'selected' if b.id in selected_ids }}>
-            {{ b.name }}（{{ b.kind }} {{ b.server }}:{{ b.port }}{% if not b.enabled %}，已禁用{% endif %}）
+            {{ b.name }}（{{ b.kind }} {{ b.server }}:{{ b.port }}{% if not b.enabled %}，已禁用{% endif %}，{{ b.scope|scope_label }}）
           </option>
           {% endfor %}
         </select>
@@ -211,6 +258,38 @@
     <div class="muted">生成失败，先处理上面的检查结果。</div>
     {% else %}
     <div class="muted">暂无预览。</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <h2>渲染历史</h2>
+  <div class="panel-body">
+    {% if renders %}
+    <table>
+      <thead><tr><th>时间</th><th>触发</th><th>SHA</th><th class="num">大小</th></tr></thead>
+      <tbody>
+        {% for r in renders %}
+        <tr>
+          <td class="muted">{{ r.at|ts }}</td>
+          <td class="muted">
+            {% if r.trigger == 'save' %}保存
+            {% elif r.trigger == 'api' %}客户端拉取
+            {% elif r.trigger == 'download' %}下载
+            {% else %}{{ r.trigger }}{% endif %}
+          </td>
+          <td class="mono">{{ r.sha[:12] }}</td>
+          <td class="num muted">{{ (r.size or 0)|human_size }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="muted">还没有快照。保存或客户端拉取一次后会出现。</div>
+    {% endif %}
+    {% if diff_lines %}
+    <div style="font-size:13px;color:var(--dim);margin:16px 0 8px">与上一版的差异</div>
+    <pre>{{ diff_lines|join('\n') }}</pre>
     {% endif %}
   </div>
 </div>

@@ -20,14 +20,21 @@
   <h2>新建前置配置</h2>
   <div class="panel-body">
     <form method="post" action="/fronts/add">
-      <div class="grid3">
+      <div class="grid4">
         <div class="field">
           <label>名称</label>
-          <input type="text" name="name" required placeholder="例如 家里路由器">
+          <input type="text" name="name" required placeholder="例如 r7 中继">
         </div>
         <div class="field">
           <label>标识（slug，可留空）</label>
-          <input type="text" name="slug" placeholder="home-router">
+          <input type="text" name="slug" placeholder="r7-relay">
+        </div>
+        <div class="field">
+          <label>角色</label>
+          <select name="role">
+            <option value="relay" selected>relay（TPROXY 中继，不接管 DNS）</option>
+            <option value="gateway">gateway（旁路由网关，fake-ip）</option>
+          </select>
         </div>
         <div class="field">
           <label>后端分组名</label>
@@ -38,7 +45,7 @@
         <label>后端（可多选，PROXY 分组里按这个顺序排列）</label>
         <select name="backend_ids" multiple size="6">
           {% for b in backends %}
-          <option value="{{ b.id }}">{{ b.name }}（{{ b.kind }} {{ b.server }}:{{ b.port }}）</option>
+          <option value="{{ b.id }}">{{ b.name }}（{{ b.kind }} {{ b.server }}:{{ b.port }}，{{ b.scope|scope_label }}）</option>
           {% endfor %}
         </select>
         <div class="hint">
@@ -64,7 +71,7 @@
         <td>
           <a href="/fronts/{{ f.id }}">{{ f.name }}</a>
           {% if not f.enabled %}<span class="badge warn">已禁用</span>{% endif %}
-          <div class="tag">/{{ f.slug }}</div>
+          <div class="tag">{{ f.role }} · /{{ f.slug }}</div>
         </td>
         <td class="muted">
           {% for b in f._backends %}{{ b.name }}{% if not loop.last %}、{% endif %}{% else %}—{% endfor %}

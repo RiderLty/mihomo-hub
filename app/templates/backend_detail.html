@@ -24,6 +24,32 @@
 </div>
 
 <div class="panel">
+  <h2>连通性</h2>
+  <div class="panel-body">
+    {% if b.last_check_at %}
+      {% if b.last_check_ok %}
+      <span class="badge ok">可达 {{ b.last_check_ms or 0 }}ms</span>
+      {% elif b.scope == 'behind-r7' %}
+      <span class="badge warn">hub 不可达（仅 r7 可达）</span>
+      {% else %}
+      <span class="badge err">不可达</span>
+      {% endif %}
+      <span class="muted">上次检测 {{ b.last_check_at|ts }}</span>
+      {% if b.last_check_error %}<div class="hint">{{ b.last_check_error }}</div>{% endif %}
+    {% else %}
+    <span class="badge never">未检测</span>
+    {% endif %}
+    <div class="row" style="margin-top:10px">
+      <button class="tiny" type="button" data-check-backend="{{ b.id }}">立即检测</button>
+      <span class="hint" style="margin:0">TCP connect 3 秒；socks5 且无鉴权时完成 SOCKS5 握手。</span>
+    </div>
+    <div class="hint">
+      作用域标记为 <code>behind-r7</code> 时，hub 检测不到属于正常现象，只有 r7 能访问该地址。
+    </div>
+  </div>
+</div>
+
+<div class="panel">
   <h2>编辑</h2>
   <div class="panel-body">
     <form method="post" action="/backends/{{ b.id }}/update">
@@ -50,7 +76,15 @@
           <input type="number" name="port" value="{{ b.port }}" min="1" max="65535" required>
         </div>
       </div>
-      <div class="grid3">
+      <div class="grid4">
+        <div class="field">
+          <label>作用域</label>
+          <select name="scope">
+            <option value="lan" {{ 'selected' if b.scope == 'lan' }}>LAN（hub/NAS 同网可达）</option>
+            <option value="behind-r7" {{ 'selected' if b.scope == 'behind-r7' }}>behind-r7（只有 r7 可达）</option>
+            <option value="public" {{ 'selected' if b.scope == 'public' }}>public（公网可达）</option>
+          </select>
+        </div>
         <div class="field"><label>用户名（可选）</label><input type="text" name="username" value="{{ b.username or '' }}"></div>
         <div class="field"><label>密码（可选）</label><input type="password" name="password" value="{{ b.password or '' }}"></div>
         <div class="field"><label>备注 / 位置</label><input type="text" name="note" value="{{ b.note or '' }}"></div>

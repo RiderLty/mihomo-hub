@@ -39,10 +39,22 @@
         </div>
         <div class="field">
           <label>Port</label>
-          <input type="number" name="port" required min="1" max="65535" value="7893">
+          <input type="number" name="port" required min="1" max="65535" value="7890">
         </div>
       </div>
-      <div class="grid3">
+      <div class="hint" style="margin-top:-4px">
+        mihomo 的 mixed 口通常是 <code>7890</code>；<code>7893</code> 一般是 TPROXY 口，不能当 socks5 用。
+        glash 的 socks 口可能是 <code>7891</code>。
+      </div>
+      <div class="grid4">
+        <div class="field">
+          <label>作用域</label>
+          <select name="scope">
+            <option value="lan" selected>LAN（hub/NAS 同网可达）</option>
+            <option value="behind-r7">behind-r7（只有 r7 可达）</option>
+            <option value="public">public（公网可达）</option>
+          </select>
+        </div>
         <div class="field"><label>用户名（可选）</label><input type="text" name="username"></div>
         <div class="field"><label>密码（可选）</label><input type="password" name="password"></div>
         <div class="field"><label>备注 / 位置</label><input type="text" name="note" placeholder="家里 / 外出 F50 Pro"></div>
@@ -74,9 +86,13 @@
 <div class="panel">
   <h2>已添加（{{ backends|length }}）</h2>
   {% if backends %}
+  <div class="row" style="margin-bottom:10px">
+    <button class="tiny" type="button" data-check-all-backends>全部检测</button>
+    <span class="hint" style="margin:0">TCP 3s；socks5 且无鉴权时再做一次握手。behind-r7 只有 r7 能连。</span>
+  </div>
   <table>
     <thead>
-      <tr><th>名称</th><th>类型</th><th>地址</th><th>UDP</th><th>备注</th><th>被引用</th><th class="right">操作</th></tr>
+      <tr><th>名称</th><th>类型</th><th>地址</th><th>作用域</th><th>可达性</th><th>备注</th><th>被引用</th><th class="right">操作</th></tr>
     </thead>
     <tbody>
       {% for b in backends %}
@@ -87,12 +103,29 @@
         </td>
         <td class="muted">{{ b.kind }}</td>
         <td class="mono">{{ b.server }}:{{ b.port }}</td>
-        <td class="muted">{{ '是' if b.udp else '否' }}</td>
+        <td><span class="tag">{{ b.scope|scope_label }}</span></td>
+        <td>
+          {% if b.last_check_at %}
+            {% if b.last_check_ok %}
+            <span class="badge ok">可达 {{ b.last_check_ms or 0 }}ms</span>
+            {% elif b.scope == 'behind-r7' %}
+            <span class="badge warn" title="{{ b.last_check_error or '' }}">hub 不可达（仅 r7）</span>
+            {% else %}
+            <span class="badge err" title="{{ b.last_check_error or '' }}">不可达</span>
+            {% endif %}
+            <div class="tag">{{ b.last_check_at|ts }}</div>
+          {% else %}
+          <span class="badge never">未检测</span>
+          {% endif %}
+        </td>
         <td class="muted">{{ b.note or '' }}</td>
         <td class="muted">
           {% for p in usage.get(b.id, []) %}<a href="/fronts/{{ p.id }}">{{ p.name }}</a>{% if not loop.last %}、{% endif %}{% else %}—{% endfor %}
         </td>
-        <td class="right"><a class="btn tiny" href="/backends/{{ b.id }}">编辑</a></td>
+        <td class="right">
+          <button class="tiny" type="button" data-check-backend="{{ b.id }}">检测</button>
+          <a class="btn tiny" href="/backends/{{ b.id }}">编辑</a>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

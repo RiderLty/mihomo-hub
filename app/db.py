@@ -1,6 +1,7 @@
 """SQLite 持久化层。用标准库 sqlite3，不引入 ORM。"""
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -77,9 +78,14 @@ CREATE TABLE IF NOT EXISTS front_backends (
     tls             INTEGER NOT NULL DEFAULT 0,
     sni             TEXT,
     skip_cert_verify INTEGER NOT NULL DEFAULT 0,
+    scope           TEXT    NOT NULL DEFAULT 'lan',
     extra_yaml      TEXT,
     note            TEXT,
     enabled         INTEGER NOT NULL DEFAULT 1,
+    last_check_at   TEXT,
+    last_check_ok   INTEGER,
+    last_check_ms   INTEGER,
+    last_check_error TEXT,
     created_at      TEXT    NOT NULL,
     updated_at      TEXT    NOT NULL
 );
@@ -89,6 +95,7 @@ CREATE TABLE IF NOT EXISTS front_profiles (
     slug                  TEXT    NOT NULL UNIQUE,
     name                  TEXT    NOT NULL,
     enabled               INTEGER NOT NULL DEFAULT 1,
+    role                  TEXT    NOT NULL DEFAULT 'relay',
     source_profile_id     INTEGER NOT NULL DEFAULT 1,
     backend_group_name    TEXT    NOT NULL DEFAULT 'PROXY',
     backend_group_type    TEXT    NOT NULL DEFAULT 'select',
@@ -99,6 +106,9 @@ CREATE TABLE IF NOT EXISTS front_profiles (
     base_url              TEXT    NOT NULL DEFAULT '',
     base_template         TEXT    NOT NULL DEFAULT '',
     rule_provider_proxy   TEXT    NOT NULL DEFAULT 'DIRECT',
+    api_port              INTEGER NOT NULL DEFAULT 9090,
+    tproxy_port           INTEGER NOT NULL DEFAULT 7893,
+    edge_host             TEXT    NOT NULL DEFAULT '',
     token                 TEXT    NOT NULL DEFAULT '',
     created_at            TEXT    NOT NULL,
     updated_at            TEXT    NOT NULL
@@ -112,6 +122,18 @@ CREATE TABLE IF NOT EXISTS front_profile_backends (
 );
 
 CREATE INDEX IF NOT EXISTS idx_front_pb_profile ON front_profile_backends(profile_id);
+
+CREATE TABLE IF NOT EXISTS front_renders (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id  INTEGER NOT NULL,
+    at          TEXT    NOT NULL,
+    trigger     TEXT    NOT NULL,
+    sha         TEXT    NOT NULL,
+    size        INTEGER NOT NULL,
+    content     TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_front_renders_profile ON front_renders(profile_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS fetch_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -210,8 +232,29 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE rulesets ADD COLUMN path TEXT")
 
     front_cols = {r["name"] for r in conn.execute("PRAGMA table_info(front_profiles)")}
-    if front_cols and "custom_rules" not in front_cols:
-        conn.execute("ALTER TABLE front_profiles ADD COLUMN custom_rules TEXT NOT NULL DEFAULT ''")
+    if front_cols:
+        # 老库里的 front 默认 gateway，保持原有 fake-ip 模板行为
+        for name, ddl in (
+            ("custom_rules", "TEXT NOT NULL DEFAULT ''"),
+            ("role", "TEXT NOT NULL DEFAULT 'gateway'"),
+            ("api_port", "INTEGER NOT NULL DEFAULT 9090"),
+            ("tproxy_port", "INTEGER NOT NULL DEFAULT 7893"),
+            ("edge_host", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if name not in front_cols:
+                conn.execute(f"ALTER TABLE front_profiles ADD COLUMN {name} {ddl}")
+
+    backend_cols = {r["name"] for r in conn.execute("PRAGMA table_info(front_backends)")}
+    if backend_cols:
+        for name, ddl in (
+            ("scope", "TEXT NOT NULL DEFAULT 'lan'"),
+            ("last_check_at", "TEXT"),
+            ("last_check_ok", "INTEGER"),
+            ("last_check_ms", "INTEGER"),
+            ("last_check_error", "TEXT"),
+        ):
+            if name not in backend_cols:
+                conn.execute(f"ALTER TABLE front_backends ADD COLUMN {name} {ddl}")
 
 
 # ---------- settings ----------
@@ -264,3 +307,44 @@ def add_log(kind: str, ref_id: int, ref_slug: str, ok: bool, *,
 
 def recent_logs(limit: int = 20) -> list[sqlite3.Row]:
     return query("SELECT * FROM fetch_log ORDER BY id DESC LIMIT ?", (limit,))
+
+
+# ---------- front renders ----------
+
+def add_front_render(profile_id: int, content: str, trigger: str) -> None:
+    """保存渲染快照；内容没变化时跳过，只保留最近 50 份。"""
+    sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    with tx() as conn:
+        row = conn.execute(
+            "SELECT sha FROM front_renders WHERE profile_id = ? ORDER BY id DESC LIMIT 1",
+            (profile_id,),
+        ).fetchone()
+        if row is not None and row["sha"] == sha:
+            return
+        conn.execute(
+            "INSERT INTO front_renders(profile_id, at, trigger, sha, size, content)"
+            " VALUES(?,?,?,?,?,?)",
+            (profile_id, now_iso(), trigger, sha, len(content.encode("utf-8")), content),
+        )
+        conn.execute(
+            "DELETE FROM front_renders WHERE profile_id = ? AND id NOT IN"
+            " (SELECT id FROM front_renders WHERE profile_id = ? ORDER BY id DESC LIMIT 50)",
+            (profile_id, profile_id),
+        )
+
+
+def front_renders(profile_id: int, limit: int = 20) -> list[sqlite3.Row]:
+    return query(
+        "SELECT id, at, trigger, sha, size, content FROM front_renders"
+        " WHERE profile_id = ? ORDER BY id DESC LIMIT ?",
+        (profile_id, limit),
+    )
+
+
+def set_backend_check(backend_id: int, ok: bool, latency_ms: int | None, error: str = "") -> None:
+    with tx() as conn:
+        conn.execute(
+            "UPDATE front_backends SET last_check_at=?, last_check_ok=?, last_check_ms=?,"
+            " last_check_error=?, updated_at=? WHERE id=?",
+            (now_iso(), 1 if ok else 0, latency_ms, (error or "")[:500], now_iso(), backend_id),
+        )

@@ -90,6 +90,10 @@ uv run run.py    # 启动，监听 8091
 | `GET /api/providers/<slug>.yaml` | 机场缓存，**只有 proxies 段** |
 | `GET /api/rulesets/<slug>.list` | 规则集原文（`text/plain`） |
 | `GET /api/fronts/<slug>.yaml` | 前置配置（路由器/边缘设备），可选 `?token=` |
+| `GET /api/fronts/<slug>/deploy.sh` | 边缘部署脚本（写 env.sh + 重启），可选 `?token=` |
+| `POST /backends/<id>/check` | 后端 TCP / SOCKS5 连通性检测，返回 JSON |
+| `POST /backends/check-all` | 检测全部后端 |
+| `POST /fronts/<id>/check-providers` | 检测前端配置里的 rule-provider URL |
 | `GET /api/status` | JSON 状态，方便接监控 |
 | `GET /healthz` | 健康检查 |
 
@@ -110,6 +114,22 @@ uv run run.py    # 启动，监听 8091
   `[PROXY, DIRECT]`。默认值按 NAS 分组第一项推断：NAS 首项是 `DIRECT` 就默认直连，
   否则默认 `PROXY`。这样直连分类在路由器就结束，不会进 NAS，也不消耗 F50 流量。
   每台设备还可以加自己的附加规则（源 IP、BT 端口、IPv6 直连等），插在 NAS 规则之前。
+
+前置配置有 `relay` / `gateway` 两种角色：
+
+- `relay`（r7 这类 TPROXY 边缘设备）：不接管 DNS、不用 fake-ip，输出 `tproxy-port`，
+  必须开 sniffer（TLS/HTTP/QUIC），可直接被边缘脚本的 `mihomo -t` 校验；
+- `gateway`（旁路由网关）：使用 fake-ip，同样输出 `tproxy-port` 并建议开 sniffer。
+
+每份前置配置还会输出 `external-controller`（端口可配，默认 9090），详情页在填了
+「边缘设备地址」后会显示 API 地址，方便挂 zashboard。边缘脚本不再需要 `sed` 注入
+`tproxy-port`；`deploy.sh` 会写 `SUB_URL` 到 env.sh 并尝试重启服务。
+
+代理后端表单默认端口是 7890（mihomo mixed 口）；7893 通常是 TPROXY 口，不能当 socks 用。
+后端可以标记 `lan` / `behind-r7` / `public`，`behind-r7` 只有 r7 可达，hub 的检测显示
+不可达属于正常。后端列表支持单个/全部连通性检测；前置配置详情页会显示不可达告警。
+每次保存 / 客户端拉取 / 下载都会保存一份渲染快照，详情页可以看与上一版的 diff，
+也可以一键检测 rule-provider URL。
 
 订阅地址形如：
 

@@ -9,9 +9,12 @@
 """
 from __future__ import annotations
 
+import asyncio
 import ipaddress
+import time
 from urllib.parse import quote, urlsplit
 
+import httpx
 import yaml
 
 from . import urls
@@ -43,6 +46,8 @@ log-level: info
 ipv6: false
 unified-delay: true
 tcp-concurrent: true
+external-controller: 0.0.0.0:9090
+tproxy-port: 7893
 
 geox-url:
   geoip: "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
@@ -62,6 +67,8 @@ sniffer:
       ports: [443]
     HTTP:
       ports: [80, 8080-8880]
+    QUIC:
+      ports: [443]
 
 dns:
   enable: true
@@ -97,6 +104,74 @@ proxy-groups: []
 rule-providers: {}
 rules: []
 """
+
+# 中继角色（r7 这类 TPROXY 边缘设备）：不接管 DNS、不用 fake-ip，
+# 域名分流靠 sniffer；tproxy-port 由 front 配置注入。
+RELAY_BASE_TEMPLATE = """\
+mixed-port: 7890
+allow-lan: true
+bind-address: '*'
+mode: rule
+log-level: info
+ipv6: false
+unified-delay: true
+tcp-concurrent: true
+external-controller: 0.0.0.0:9090
+tproxy-port: 7893
+
+geox-url:
+  geoip: "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
+  mmdb: "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.metadb"
+  geosite: "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
+  asn: "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/GeoLite2-ASN.mmdb"
+
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+sniffer:
+  enable: true
+  override-destination: true
+  sniff:
+    TLS:
+      ports: [443]
+    HTTP:
+      ports: [80, 8080-8880]
+    QUIC:
+      ports: [443]
+
+# relay 角色不接管 DNS，也不要 fake-ip：
+# 一旦 fake-ip 生效而设备自身流量不走 TPROXY，设备自己会解析到 198.18.x.x 而断网。
+dns:
+  enable: true
+  ipv6: false
+  listen: 0.0.0.0:1053
+  enhanced-mode: redir-host
+  nameserver:
+    - tls://223.5.5.5
+    - tls://119.29.29.29
+  proxy-server-nameserver:
+    - https://223.5.5.5/dns-query
+  nameserver-policy:
+    'geosite:cn,private':
+      - tls://223.5.5.5
+      - tls://119.29.29.29
+
+# 以下由 mihomo-hub 生成并覆盖
+proxies: []
+proxy-groups: []
+rule-providers: {}
+rules: []
+"""
+
+ROLE_TEMPLATES = {
+    "relay": RELAY_BASE_TEMPLATE,
+    "gateway": DEFAULT_BASE_TEMPLATE,
+}
+
+
+def role_template(role: str) -> str:
+    return RELAY_BASE_TEMPLATE if (role or "").strip() == "relay" else DEFAULT_BASE_TEMPLATE
 
 
 class FrontError(Exception):
@@ -185,6 +260,18 @@ def valid_group_name(name: str) -> bool:
 
 def valid_backend_name(name: str) -> bool:
     return bool(name) and name.upper() not in BUILTIN_TARGETS and "," not in name
+
+
+def valid_role(role: str) -> bool:
+    return (role or "").strip() in ROLE_TEMPLATES
+
+
+def port_or_default(value, default: int) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return default
+    return port if 0 < port < 65536 else default
 
 
 def parse_custom_rules(text: str) -> list[str]:
@@ -456,8 +543,12 @@ def build_rules(
 
 
 def render_front(front: dict, backends, source_text: str, base: str) -> str:
+    role = (front.get("role") or "relay").strip()
+    if role not in ROLE_TEMPLATES:
+        role = "relay"
     source = load_source(source_text, base)
-    doc = load_base(front.get("base_template") or "", base)
+    template = (front.get("base_template") or "").strip() or role_template(role)
+    doc = load_base(template, base)
 
     proxies = build_proxies(backends)
     backend_group_name = (
@@ -475,10 +566,15 @@ def render_front(front: dict, backends, source_text: str, base: str) -> str:
     doc["rules"] = build_rules(source, backend_group_name, base, backends, custom)
     doc.pop("proxy-providers", None)
 
+    # 中继 / 网关都提供 Controller；relay 必须带 tproxy-port
+    doc["external-controller"] = f"0.0.0.0:{port_or_default(front.get('api_port'), 9090)}"
+    if role == "relay" or "tproxy-port" in doc:
+        doc["tproxy-port"] = port_or_default(front.get("tproxy_port"), 7893)
+
     body = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
     return (
         f"# mihomo-hub front profile: {front.get('name') or front.get('slug') or ''}\n"
-        f"# rules copied from NAS profile; targets are front shim groups\n"
+        f"# role: {role}; rules copied from NAS profile; targets are front shim groups\n"
         f"{body}"
     )
 
@@ -614,4 +710,101 @@ def validate_generated(text: str, front: dict) -> list[dict]:
     backend_group = (front.get("backend_group_name") or DEFAULT_BACKEND_GROUP).strip()
     if backend_group and backend_group not in group_names:
         issues.append({"level": "error", "message": f"后端分组 '{backend_group}' 没有生成"})
+
+    role = (front.get("role") or "relay").strip()
+    if not doc.get("external-controller"):
+        issues.append({
+            "level": "error" if role == "relay" else "warn",
+            "message": "没有 external-controller，边缘设备无法挂面板或做健康检查",
+        })
+
+    sniffer = doc.get("sniffer") or {}
+    sniffer_ok = isinstance(sniffer, dict) and bool(sniffer.get("enable"))
+    if role == "relay":
+        if "tproxy-port" not in doc:
+            issues.append({"level": "error", "message": "relay 角色缺少 tproxy-port"})
+        if not sniffer_ok:
+            issues.append({
+                "level": "error",
+                "message": "relay 角色必须开启 sniffer（域名分流依赖 TLS SNI）",
+            })
+        dns = doc.get("dns") or {}
+        if isinstance(dns, dict) and str(dns.get("enhanced-mode") or "").lower() == "fake-ip":
+            issues.append({
+                "level": "error",
+                "message": "relay 角色不能使用 fake-ip，否则边缘设备自身可能断网",
+            })
+        sniff = sniffer.get("sniff") if isinstance(sniffer, dict) else None
+        if isinstance(sniff, dict) and "QUIC" not in sniff:
+            issues.append({
+                "level": "warn",
+                "message": "sniffer 没有 QUIC，UDP/443 会退化到 IP 规则",
+            })
+    else:
+        if "tproxy-port" not in doc:
+            issues.append({
+                "level": "warn",
+                "message": "gateway 没有 tproxy-port，透明代理可能不可用",
+            })
+        if not sniffer_ok:
+            issues.append({"level": "warn", "message": "建议给 gateway 开启 sniffer"})
     return issues
+
+
+# ---------------------------------------------------------------- provider urls
+
+_PROVIDER_URL_CACHE: dict[str, tuple[float, dict]] = {}
+_PROVIDER_URL_TTL = 60.0
+
+
+async def _probe_url(client: httpx.AsyncClient, url: str) -> tuple[bool, int | None, str]:
+    try:
+        resp = await client.head(url)
+        if resp.status_code in (400, 405, 501):
+            resp = await client.get(url)
+    except Exception:
+        try:
+            resp = await client.get(url)
+        except Exception as exc:  # noqa: BLE001
+            return False, None, f"{type(exc).__name__}: {exc}"
+    if resp.status_code < 400:
+        return True, resp.status_code, ""
+    return False, resp.status_code, f"HTTP {resp.status_code}"
+
+
+async def check_provider_urls(text: str) -> list[dict]:
+    """检查生成配置里每个 rule-provider URL 是否可达，结果缓存 60 秒。"""
+    try:
+        doc = yaml.safe_load(text) or {}
+    except Exception as exc:  # noqa: BLE001
+        return [{"name": "", "url": "", "ok": False, "status": None,
+                 "error": f"YAML 解析失败：{exc}", "cached": False}]
+    providers = doc.get("rule-providers") or {}
+    if not isinstance(providers, dict):
+        return []
+
+    jobs: list[tuple[str, str]] = []
+    for name, cfg in providers.items():
+        if isinstance(cfg, dict) and isinstance(cfg.get("url"), str):
+            jobs.append((str(name), cfg["url"]))
+    if not jobs:
+        return []
+
+    async def check_one(name: str, url: str) -> dict:
+        now = time.monotonic()
+        cached = _PROVIDER_URL_CACHE.get(url)
+        if cached and cached[0] > now:
+            item = dict(cached[1])
+            item["name"] = name
+            item["cached"] = True
+            return item
+        ok, status, error = await _probe_url(client, url)
+        item = {"name": name, "url": url, "ok": ok, "status": status,
+                "error": error, "cached": False}
+        _PROVIDER_URL_CACHE[url] = (now + _PROVIDER_URL_TTL, dict(item))
+        return item
+
+    async with httpx.AsyncClient(
+        timeout=5, follow_redirects=True, verify=False,
+    ) as client:
+        return list(await asyncio.gather(*(check_one(n, u) for n, u in jobs)))
